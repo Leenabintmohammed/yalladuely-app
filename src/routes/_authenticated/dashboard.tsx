@@ -31,7 +31,7 @@ function DashboardPage() {
 
   const rows = (invoices.data ?? []) as unknown as InvoiceRow[];
   const s = summarize(rows, (payments.data ?? []) as { amount: number; payment_date: string }[]);
-  const currency = profile.data?.default_currency ?? "AED";
+  const currency = profile.data?.currency ?? "AED";
 
   const cards = [
     { key: "outstanding" as const, value: s.outstanding, tone: "text-foreground" },
