@@ -92,7 +92,7 @@ function ClientsPage() {
                 <div className="mt-4 flex items-end justify-between">
                   <div>
                     <p className="text-xs text-muted-foreground">{t("outstanding")}</p>
-                    <p className="text-lg font-semibold">{formatMoney(outstanding, c.currency ?? "AED", lang)}</p>
+                    <p className="text-lg font-semibold">{formatMoney(outstanding, "AED", lang)}</p>
                   </div>
                   <p className="text-xs text-muted-foreground">
                     {mine.length} {t("invoices").toLowerCase()}
