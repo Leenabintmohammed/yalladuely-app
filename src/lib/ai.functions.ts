@@ -15,10 +15,9 @@ const ChatInput = z.object({
 export type PendingAction = {
   id: string;
   tool_name: string;
-  intent: string | null;
-  parameters: Record<string, unknown>;
+  intent: string;
+  parameters_json: string;
   autonomy_level: string;
-  confidence: number | null;
   title: string;
   fields: { label: string; value: string }[];
 };
@@ -34,13 +33,16 @@ export const duelyChat = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => ChatInput.parse(input))
   .handler(async ({ data, context }): Promise<ChatResult> => {
     const { runOrchestrator } = await import("./duely-orchestrator.server");
+    const focus = data.focus
+      ? { type: data.focus.type, id: data.focus.id, summary: data.focus.summary ?? "" }
+      : null;
     return runOrchestrator({
       supabase: context.supabase,
       userId: context.userId,
       message: data.message,
       sessionId: data.session_id,
       page: data.page ?? "dashboard",
-      focus: data.focus ?? null,
+      focus,
     });
   });
 
@@ -56,12 +58,12 @@ export const resolveAction = createServerFn({ method: "POST" })
       .select("*")
       .eq("id", data.action_id)
       .maybeSingle();
-    if (!action) return { error: "action_not_found" as const };
-    if (action.status !== "awaiting_approval") return { error: "already_resolved" as const };
+    if (!action) return { status: "error" as const, message: "action_not_found" };
+    if (action.status !== "awaiting_approval") return { status: "error" as const, message: "already_resolved" };
 
     if (data.decision === "reject") {
       await context.supabase.from("ai_actions").update({ status: "rejected" }).eq("id", action.id);
-      return { status: "rejected" as const };
+      return { status: "rejected" as const, message: "" };
     }
 
     const result = await executeTool(action.tool_name, (action.parameters ?? {}) as Record<string, unknown>, {
@@ -72,5 +74,5 @@ export const resolveAction = createServerFn({ method: "POST" })
       .from("ai_actions")
       .update({ status: "completed", result: result as never })
       .eq("id", action.id);
-    return { status: "completed" as const, result };
+    return { status: "completed" as const, message: JSON.stringify(result) };
   });
