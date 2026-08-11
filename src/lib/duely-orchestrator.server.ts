@@ -1,8 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateText, stepCountIs, tool } from "ai";
 import { z } from "zod";
-import { createLovableAiGatewayProvider, DUELY_MODEL } from "./ai-gateway.server";
-import { TOOL_AUTONOMY, executeTool, dashboardSummary, type ToolCtx } from "./duely-tools.server";
+import { getDuelyModel, hasAiProvider } from "./ai-provider.server";
+import { TOOL_AUTONOMY, executeTool, dashboardSummary, atRiskClients, type ToolCtx } from "./duely-tools.server";
+import { syncNotifications } from "./finance.server";
 
 export type PendingAction = {
   id: string;
@@ -24,6 +25,9 @@ const TITLES: Record<string, string> = {
   send_invoice: "Send Invoice",
   send_reminder: "Send Reminder",
   update_company_policy: "Update Company Policy",
+  create_payment_plan: "Create Payment Plan",
+  cancel_payment_plan: "Cancel Payment Plan",
+  reverse_payment: "Reverse Payment",
 };
 
 function describe(params: Record<string, unknown>) {
@@ -35,12 +39,19 @@ function describe(params: Record<string, unknown>) {
     }));
 }
 
-async function buildContext(ctx: ToolCtx, page: string, focus: { type: string; id: string; summary?: string } | null) {
-  const [{ data: profile }, { data: policies }, summary, { data: clients }] = await Promise.all([
+async function buildContext(
+  ctx: ToolCtx,
+  page: string,
+  focus: { type: string; id: string; summary?: string } | null,
+  selection: { type: string; id: string }[],
+) {
+  const [{ data: profile }, { data: policies }, summary, { data: clients }, notifications, risk] = await Promise.all([
     ctx.supabase.from("profiles").select("*").eq("id", ctx.userId).maybeSingle(),
     ctx.supabase.from("company_policies").select("policy_key,policy_value"),
     dashboardSummary(ctx),
     ctx.supabase.from("clients").select("id,name,company_name,email").limit(50),
+    syncNotifications(ctx),
+    atRiskClients(ctx),
   ]);
 
   let focusDetail: unknown = null;
@@ -63,14 +74,35 @@ async function buildContext(ctx: ToolCtx, page: string, focus: { type: string; i
     memory = m ?? [];
   }
 
+  const selectedInvoiceIds = selection.filter((s) => s.type === "invoice").map((s) => s.id);
+  const selectedClientIds = selection.filter((s) => s.type === "client").map((s) => s.id);
+  const selected: Record<string, unknown> = {};
+  if (selectedInvoiceIds.length) {
+    const { data } = await ctx.supabase
+      .from("invoices")
+      .select("id,invoice_number,amount,remaining_balance,currency,status,due_date, clients(id,name)")
+      .in("id", selectedInvoiceIds);
+    selected['invoices'] = data ?? [];
+  }
+  if (selectedClientIds.length) {
+    const { data } = await ctx.supabase
+      .from("clients")
+      .select("id,name,company_name,email,status")
+      .in("id", selectedClientIds);
+    selected['clients'] = data ?? [];
+  }
+
   return {
     user: { id: ctx.userId, name: profile?.full_name, company: profile?.company_name, currency: profile?.currency },
     current_page: page,
     current_focus: focus ? { ...focus, detail: focusDetail } : null,
+    current_selection: selection.length ? selected : null,
     company_policies: policies ?? [],
     relevant_client_memory: memory,
     clients_directory: clients ?? [],
     financial_snapshot: summary,
+    unread_notifications: (notifications.notifications ?? []).slice(0, 15),
+    at_risk_clients: risk.clients,
     today: new Date().toISOString().slice(0, 10),
   };
 }
