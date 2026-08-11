@@ -1,4 +1,14 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import {
+  clientRisk,
+  createPaymentPlan,
+  deriveInvoiceStatus,
+  notifyPaymentReceived,
+  recalcInvoice,
+  recalcPlan,
+  refreshOverdueInvoices,
+  syncNotifications,
+} from "./finance.server";
 
 export type Autonomy = "auto" | "approval_required" | "human_only";
 
@@ -24,6 +34,15 @@ export const TOOL_AUTONOMY: Record<string, Autonomy> = {
   send_invoice: "approval_required",
   send_reminder: "approval_required",
   update_company_policy: "approval_required",
+  create_payment_plan: "approval_required",
+  cancel_payment_plan: "approval_required",
+  reverse_payment: "approval_required",
+  record_installment_payment: "auto",
+  list_payment_plans: "auto",
+  get_payment_plan: "auto",
+  get_client_risk: "auto",
+  list_at_risk_clients: "auto",
+  list_notifications: "auto",
 };
 
 function num(v: unknown, fallback = 0) {
@@ -47,11 +66,7 @@ export function deriveStatus(inv: {
   paid_amount: number;
   due_date: string;
 }): string {
-  if (inv.status === "cancelled" || inv.status === "draft") return inv.status;
-  if (inv.paid_amount >= inv.amount && inv.amount > 0) return "paid";
-  if (inv.paid_amount > 0) return inv.due_date < today() ? "overdue" : "partially_paid";
-  if (inv.due_date < today()) return "overdue";
-  return inv.status === "viewed" ? "viewed" : "sent";
+  return deriveInvoiceStatus(inv);
 }
 
 async function resolveClient(ctx: ToolCtx, p: { client_id?: string; client_name?: string }) {
@@ -113,33 +128,11 @@ async function defaultTerms(ctx: ToolCtx) {
 }
 
 async function syncInvoice(ctx: ToolCtx, invoiceId: string) {
-  const { data: inv } = await ctx.supabase.from("invoices").select("*").eq("id", invoiceId).maybeSingle();
-  if (!inv) return null;
-  const { data: pays } = await ctx.supabase.from("payments").select("amount").eq("invoice_id", invoiceId);
-  const paid = (pays ?? []).reduce((s, p) => s + num(p.amount), 0);
-  const amount = num(inv.amount);
-  const status = deriveStatus({ status: inv.status, amount, paid_amount: paid, due_date: inv.due_date });
-  const { data: updated } = await ctx.supabase
-    .from("invoices")
-    .update({
-      paid_amount: paid,
-      remaining_balance: Math.max(0, amount - paid),
-      status,
-      paid_date: paid >= amount && amount > 0 ? today() : null,
-    })
-    .eq("id", invoiceId)
-    .select("*")
-    .single();
-  return updated;
+  return recalcInvoice(ctx, invoiceId);
 }
 
 export async function refreshOverdue(ctx: ToolCtx) {
-  await ctx.supabase
-    .from("invoices")
-    .update({ status: "overdue" })
-    .eq("owner_id", ctx.userId)
-    .lt("due_date", today())
-    .in("status", ["sent", "viewed", "partially_paid"]);
+  await refreshOverdueInvoices(ctx);
 }
 
 export async function executeTool(name: string, params: Record<string, unknown>, ctx: ToolCtx): Promise<unknown> {
