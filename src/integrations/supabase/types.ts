@@ -22,8 +22,11 @@ export type Database = {
           created_at: string
           id: string
           intent: string | null
+          new_state: Json | null
+          origin: string
           owner_id: string
           parameters: Json
+          previous_state: Json | null
           result: Json | null
           status: string
           tool_name: string
@@ -35,8 +38,11 @@ export type Database = {
           created_at?: string
           id?: string
           intent?: string | null
+          new_state?: Json | null
+          origin?: string
           owner_id: string
           parameters?: Json
+          previous_state?: Json | null
           result?: Json | null
           status?: string
           tool_name: string
@@ -48,8 +54,11 @@ export type Database = {
           created_at?: string
           id?: string
           intent?: string | null
+          new_state?: Json | null
+          origin?: string
           owner_id?: string
           parameters?: Json
+          previous_state?: Json | null
           result?: Json | null
           status?: string
           tool_name?: string
@@ -279,6 +288,196 @@ export type Database = {
           },
         ]
       }
+      notifications: {
+        Row: {
+          body: string | null
+          client_id: string | null
+          created_at: string
+          dedupe_key: string
+          event_type: string
+          id: string
+          installment_id: string | null
+          invoice_id: string | null
+          owner_id: string
+          plan_id: string | null
+          read_at: string | null
+          title: string
+        }
+        Insert: {
+          body?: string | null
+          client_id?: string | null
+          created_at?: string
+          dedupe_key: string
+          event_type: string
+          id?: string
+          installment_id?: string | null
+          invoice_id?: string | null
+          owner_id: string
+          plan_id?: string | null
+          read_at?: string | null
+          title: string
+        }
+        Update: {
+          body?: string | null
+          client_id?: string | null
+          created_at?: string
+          dedupe_key?: string
+          event_type?: string
+          id?: string
+          installment_id?: string | null
+          invoice_id?: string | null
+          owner_id?: string
+          plan_id?: string | null
+          read_at?: string | null
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notifications_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "notifications_installment_id_fkey"
+            columns: ["installment_id"]
+            isOneToOne: false
+            referencedRelation: "payment_plan_installments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "notifications_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "notifications_plan_id_fkey"
+            columns: ["plan_id"]
+            isOneToOne: false
+            referencedRelation: "payment_plans"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      payment_plan_installments: {
+        Row: {
+          amount: number
+          created_at: string
+          due_date: string
+          id: string
+          owner_id: string
+          paid_amount: number
+          plan_id: string
+          seq: number
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          amount?: number
+          created_at?: string
+          due_date: string
+          id?: string
+          owner_id: string
+          paid_amount?: number
+          plan_id: string
+          seq: number
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          amount?: number
+          created_at?: string
+          due_date?: string
+          id?: string
+          owner_id?: string
+          paid_amount?: number
+          plan_id?: string
+          seq?: number
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "payment_plan_installments_plan_id_fkey"
+            columns: ["plan_id"]
+            isOneToOne: false
+            referencedRelation: "payment_plans"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      payment_plans: {
+        Row: {
+          client_id: string
+          created_at: string
+          currency: string
+          frequency: string
+          id: string
+          installment_count: number
+          invoice_id: string | null
+          notes: string | null
+          owner_id: string
+          paid_amount: number
+          remaining_amount: number
+          start_date: string
+          status: string
+          total_amount: number
+          updated_at: string
+        }
+        Insert: {
+          client_id: string
+          created_at?: string
+          currency?: string
+          frequency?: string
+          id?: string
+          installment_count?: number
+          invoice_id?: string | null
+          notes?: string | null
+          owner_id: string
+          paid_amount?: number
+          remaining_amount?: number
+          start_date?: string
+          status?: string
+          total_amount?: number
+          updated_at?: string
+        }
+        Update: {
+          client_id?: string
+          created_at?: string
+          currency?: string
+          frequency?: string
+          id?: string
+          installment_count?: number
+          invoice_id?: string | null
+          notes?: string | null
+          owner_id?: string
+          paid_amount?: number
+          remaining_amount?: number
+          start_date?: string
+          status?: string
+          total_amount?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "payment_plans_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payment_plans_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       payments: {
         Row: {
           amount: number
@@ -286,13 +485,16 @@ export type Database = {
           created_at: string
           currency: string
           id: string
+          installment_id: string | null
           invoice_id: string | null
           is_demo: boolean
           notes: string | null
           owner_id: string
           payment_date: string
           payment_method: string | null
+          plan_id: string | null
           reference: string | null
+          reversed_at: string | null
         }
         Insert: {
           amount: number
@@ -300,13 +502,16 @@ export type Database = {
           created_at?: string
           currency?: string
           id?: string
+          installment_id?: string | null
           invoice_id?: string | null
           is_demo?: boolean
           notes?: string | null
           owner_id: string
           payment_date?: string
           payment_method?: string | null
+          plan_id?: string | null
           reference?: string | null
+          reversed_at?: string | null
         }
         Update: {
           amount?: number
@@ -314,13 +519,16 @@ export type Database = {
           created_at?: string
           currency?: string
           id?: string
+          installment_id?: string | null
           invoice_id?: string | null
           is_demo?: boolean
           notes?: string | null
           owner_id?: string
           payment_date?: string
           payment_method?: string | null
+          plan_id?: string | null
           reference?: string | null
+          reversed_at?: string | null
         }
         Relationships: [
           {
@@ -331,10 +539,24 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "payments_installment_id_fkey"
+            columns: ["installment_id"]
+            isOneToOne: false
+            referencedRelation: "payment_plan_installments"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "payments_invoice_id_fkey"
             columns: ["invoice_id"]
             isOneToOne: false
             referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payments_plan_id_fkey"
+            columns: ["plan_id"]
+            isOneToOne: false
+            referencedRelation: "payment_plans"
             referencedColumns: ["id"]
           },
         ]
