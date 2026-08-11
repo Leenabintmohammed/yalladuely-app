@@ -127,10 +127,10 @@ export async function runOrchestrator(args: {
   sessionId: string;
   page: string;
   focus: { type: string; id: string; summary?: string } | null;
+  selection?: { type: string; id: string }[];
 }): Promise<ChatResult> {
   const ctx: ToolCtx = { supabase: args.supabase, userId: args.userId };
-  const apiKey = process.env["LOVABLE_API_KEY"];
-  if (!apiKey) return { reply: "AI is not configured yet.", pending: [], performed: [] };
+  if (!hasAiProvider()) return { reply: "AI is not configured yet.", pending: [], performed: [] };
 
   await ctx.supabase.from("ai_conversations").insert({
     owner_id: args.userId,
