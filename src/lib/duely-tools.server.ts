@@ -586,6 +586,16 @@ export async function dashboardSummary(ctx: ToolCtx) {
     .gte("payment_date", monthStart.toISOString().slice(0, 10));
   const monthEnd = new Date(monthStart);
   monthEnd.setMonth(monthEnd.getMonth() + 1);
+  const { data: plans } = await ctx.supabase
+    .from("payment_plans")
+    .select("id,status,total_amount,paid_amount,remaining_amount,currency,client_id, clients(name)")
+    .in("status", ["active", "at_risk"]);
+  const { data: upcoming } = await ctx.supabase
+    .from("payment_plan_installments")
+    .select("id,seq,due_date,amount,paid_amount,status,plan_id")
+    .in("status", ["pending", "partial", "overdue"])
+    .order("due_date", { ascending: true })
+    .limit(10);
   return {
     outstanding: open.reduce((s, i) => s + num(i.remaining_balance), 0),
     overdue_total: overdue.reduce((s, i) => s + num(i.remaining_balance), 0),
@@ -603,6 +613,13 @@ export async function dashboardSummary(ctx: ToolCtx) {
       days_overdue: Math.floor((Date.now() - new Date(i.due_date).getTime()) / 86400000),
     })),
     invoice_count: list.length,
+    payment_plans: {
+      active_count: (plans ?? []).length,
+      remaining_total: (plans ?? []).reduce((s, p) => s + num(p.remaining_amount), 0),
+      at_risk_count: (plans ?? []).filter((p) => p.status === "at_risk").length,
+      plans: plans ?? [],
+    },
+    upcoming_installments: upcoming ?? [],
   };
 }
 
