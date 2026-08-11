@@ -136,18 +136,6 @@ export function useNotifications() {
   });
 }
 
-function useRemindersLegacy(invoiceId?: string) {
-  return useQuery({
-    queryKey: ["reminders", invoiceId],
-    queryFn: async () => {
-      let q = supabase.from("reminders").select("*").order("created_at", { ascending: false });
-      if (invoiceId) q = q.eq("invoice_id", invoiceId);
-      const { data } = await q;
-      return data ?? [];
-    },
-  });
-}
-void useRemindersLegacy;
 
 export type InvoiceRow = {
   id: string;
