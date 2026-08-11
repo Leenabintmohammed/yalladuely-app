@@ -147,7 +147,7 @@ export async function runOrchestrator(args: {
     .order("created_at", { ascending: true })
     .limit(20);
 
-  const contextObject = await buildContext(ctx, args.page, args.focus);
+  const contextObject = await buildContext(ctx, args.page, args.focus, args.selection ?? []);
   const pending: PendingAction[] = [];
   const performed: { tool: string; autonomy: string; status: string }[] = [];
 
@@ -332,12 +332,10 @@ export async function runOrchestrator(args: {
     ),
   };
 
-  const gateway = createLovableAiGatewayProvider(apiKey);
-
   let reply = "";
   try {
     const result = await generateText({
-      model: gateway(DUELY_MODEL),
+      model: getDuelyModel(),
       system: `${SYSTEM}\n\nCURRENT CONTEXT (JSON):\n${JSON.stringify(contextObject)}`,
       messages: (history ?? []).map((h) => ({
         role: h.role === "assistant" ? ("assistant" as const) : ("user" as const),
