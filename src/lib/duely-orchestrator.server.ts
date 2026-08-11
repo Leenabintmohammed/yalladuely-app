@@ -196,6 +196,8 @@ export async function runOrchestrator(args: {
           confidence: 0.96,
           status: (result as { error?: string })?.error ? "failed" : "completed",
           result: result as never,
+          origin: "ai",
+          new_state: result as never,
         });
         performed.push({ tool: name, autonomy, status: (result as { error?: string })?.error ? "failed" : "completed" });
         return result;
@@ -329,6 +331,66 @@ export async function runOrchestrator(args: {
         memory_key: z.string(),
         memory_value: z.any(),
       }),
+    ),
+    create_payment_plan: makeTool(
+      "create_payment_plan",
+      "Create an installment payment plan for a client, optionally tied to an invoice (requires owner approval)",
+      z.object({
+        ...clientRef,
+        invoice_id: z.string().optional(),
+        total_amount: z.number().optional(),
+        currency: z.string().optional(),
+        installment_count: z.number(),
+        frequency: z.enum(["weekly", "biweekly", "monthly", "quarterly"]).optional(),
+        start_date: z.string().optional(),
+        notes: z.string().optional(),
+      }),
+    ),
+    list_payment_plans: makeTool(
+      "list_payment_plans",
+      "List payment plans, optionally by client or status",
+      z.object({ client_id: z.string().optional(), status: z.string().optional() }),
+    ),
+    get_payment_plan: makeTool(
+      "get_payment_plan",
+      "Get one payment plan with its installments and up-to-date balances",
+      z.object({ plan_id: z.string() }),
+    ),
+    cancel_payment_plan: makeTool(
+      "cancel_payment_plan",
+      "Cancel a payment plan (requires owner approval)",
+      z.object({ plan_id: z.string() }),
+    ),
+    record_installment_payment: makeTool(
+      "record_installment_payment",
+      "Record a payment against a specific payment plan installment",
+      z.object({
+        installment_id: z.string(),
+        amount: z.number().optional(),
+        payment_date: z.string().optional(),
+        payment_method: z.string().optional(),
+        reference: z.string().optional(),
+      }),
+    ),
+    reverse_payment: makeTool(
+      "reverse_payment",
+      "Reverse a previously recorded payment (requires owner approval)",
+      z.object({ payment_id: z.string() }),
+    ),
+    get_client_risk: makeTool(
+      "get_client_risk",
+      "Payment-risk score and factors for one client",
+      z.object(clientRef),
+    ),
+    list_at_risk_clients: makeTool(
+      "list_at_risk_clients",
+      "List clients with medium or high payment risk",
+      z.object({}),
+    ),
+    list_notifications: makeTool(
+      "list_notifications",
+      "Refresh and list unread financial notifications (due soon, overdue, installments)",
+      z.object({}),
     ),
   };
 
