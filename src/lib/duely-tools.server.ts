@@ -265,7 +265,9 @@ export async function executeTool(name: string, params: Record<string, unknown>,
       }
       const { data: inv } = await ctx.supabase.from("invoices").select("*").eq("id", invoiceId!).maybeSingle();
       if (!inv) return { error: "invoice_not_found" };
-      const { error } = await ctx.supabase.from("payments").insert({
+      const { data: payment, error } = await ctx.supabase
+        .from("payments")
+        .insert({
         owner_id: ctx.userId,
         invoice_id: invoiceId!,
         client_id: inv.client_id,
@@ -275,9 +277,22 @@ export async function executeTool(name: string, params: Record<string, unknown>,
         payment_method: (p['payment_method'] as string) ?? null,
         reference: (p['reference'] as string) ?? null,
         notes: (p['notes'] as string) ?? null,
-      });
+          plan_id: (p['plan_id'] as string) ?? null,
+          installment_id: (p['installment_id'] as string) ?? null,
+        })
+        .select("*")
+        .single();
       if (error) return { error: error.message };
       const updated = await syncInvoice(ctx, invoiceId!);
+      if (payment?.plan_id) await recalcPlan(ctx, payment.plan_id);
+      if (payment)
+        await notifyPaymentReceived(ctx, {
+          payment_id: payment.id,
+          invoice_id: payment.invoice_id,
+          client_id: payment.client_id,
+          amount,
+          currency: payment.currency,
+        });
       const late = updated ? Math.floor((Date.now() - new Date(inv.due_date).getTime()) / 86400000) : 0;
       await ctx.supabase.from("client_memory").upsert(
         {
@@ -414,9 +429,145 @@ export async function executeTool(name: string, params: Record<string, unknown>,
       if (!client || "__ambiguous" in client) return { error: "client_not_resolved" };
       return await clientFinancials(ctx, client['id'] as string);
     }
+    case "create_payment_plan": {
+      const client = await resolveClient(ctx, p as never);
+      if (!client) return { error: "client_not_found" };
+      if ("__ambiguous" in client) return { error: "multiple_clients_match", candidates: client['__ambiguous'] };
+      let invoiceId = (p['invoice_id'] as string) ?? null;
+      let total = num(p['total_amount']);
+      let currency = (p['currency'] as string) ?? null;
+      if (invoiceId) {
+        const { data: inv } = await ctx.supabase.from("invoices").select("*").eq("id", invoiceId).maybeSingle();
+        if (!inv) return { error: "invoice_not_found" };
+        if (!total) total = num(inv.remaining_balance) || num(inv.amount);
+        currency = currency ?? inv.currency;
+      }
+      if (!total) return { error: "missing_total_amount" };
+      return await createPaymentPlan(ctx, {
+        client_id: client['id'] as string,
+        invoice_id: invoiceId,
+        total_amount: total,
+        currency: currency ?? (await defaultCurrency(ctx)),
+        installment_count: num(p['installment_count'], 3),
+        frequency: (p['frequency'] as string) ?? "monthly",
+        start_date: (p['start_date'] as string) ?? undefined,
+        notes: (p['notes'] as string) ?? null,
+      });
+    }
+    case "list_payment_plans": {
+      let q = ctx.supabase
+        .from("payment_plans")
+        .select("*, clients(name,company_name)")
+        .order("created_at", { ascending: false })
+        .limit(50);
+      if (p['client_id']) q = q.eq("client_id", p['client_id'] as string);
+      if (p['status']) q = q.eq("status", p['status'] as string);
+      const { data } = await q;
+      return { payment_plans: data ?? [] };
+    }
+    case "get_payment_plan": {
+      const id = p['plan_id'] as string;
+      if (!id) return { error: "missing_plan_id" };
+      return await recalcPlan(ctx, id);
+    }
+    case "cancel_payment_plan": {
+      const id = p['plan_id'] as string;
+      if (!id) return { error: "missing_plan_id" };
+      const { data, error } = await ctx.supabase
+        .from("payment_plans")
+        .update({ status: "cancelled" })
+        .eq("id", id)
+        .select("*")
+        .single();
+      if (error) return { error: error.message };
+      return { cancelled: true, plan: data };
+    }
+    case "record_installment_payment": {
+      const installmentId = p['installment_id'] as string;
+      if (!installmentId) return { error: "missing_installment_id" };
+      const { data: inst } = await ctx.supabase
+        .from("payment_plan_installments")
+        .select("*, payment_plans(id,client_id,invoice_id,currency)")
+        .eq("id", installmentId)
+        .maybeSingle();
+      if (!inst) return { error: "installment_not_found" };
+      const plan = inst.payment_plans as {
+        id: string;
+        client_id: string;
+        invoice_id: string | null;
+        currency: string;
+      } | null;
+      const amount = num(p['amount']) || Math.max(0, num(inst.amount) - num(inst.paid_amount));
+      if (!amount) return { error: "missing_amount" };
+      const { data: payment, error } = await ctx.supabase
+        .from("payments")
+        .insert({
+          owner_id: ctx.userId,
+          invoice_id: plan?.invoice_id ?? null,
+          client_id: plan?.client_id ?? null,
+          plan_id: plan?.id ?? inst.plan_id,
+          installment_id: installmentId,
+          amount,
+          currency: plan?.currency ?? (await defaultCurrency(ctx)),
+          payment_date: (p['payment_date'] as string) ?? today(),
+          payment_method: (p['payment_method'] as string) ?? null,
+          reference: (p['reference'] as string) ?? null,
+        })
+        .select("*")
+        .single();
+      if (error) return { error: error.message };
+      const state = await recalcPlan(ctx, inst.plan_id);
+      await notifyPaymentReceived(ctx, {
+        payment_id: payment.id,
+        invoice_id: payment.invoice_id,
+        client_id: payment.client_id,
+        amount,
+        currency: payment.currency,
+      });
+      return { recorded: true, ...state };
+    }
+    case "reverse_payment": {
+      const id = p['payment_id'] as string;
+      if (!id) return { error: "missing_payment_id" };
+      const { data: pay, error } = await ctx.supabase
+        .from("payments")
+        .update({ reversed_at: new Date().toISOString() })
+        .eq("id", id)
+        .select("*")
+        .single();
+      if (error) return { error: error.message };
+      if (pay.invoice_id) await syncInvoice(ctx, pay.invoice_id);
+      if (pay.plan_id) await recalcPlan(ctx, pay.plan_id);
+      return { reversed: true, payment: pay };
+    }
+    case "get_client_risk": {
+      const client = await resolveClient(ctx, p as never);
+      if (!client || "__ambiguous" in client) return { error: "client_not_resolved" };
+      const risk = await clientRisk(ctx, client['id'] as string);
+      return { client: { id: client['id'], name: client['name'] }, risk };
+    }
+    case "list_at_risk_clients": {
+      return await atRiskClients(ctx);
+    }
+    case "list_notifications": {
+      return await syncNotifications(ctx);
+    }
     default:
       return { error: `unknown_tool:${name}` };
   }
+}
+
+export async function atRiskClients(ctx: ToolCtx) {
+  const { data: clients } = await ctx.supabase.from("clients").select("id,name,company_name").limit(50);
+  const scored = await Promise.all(
+    (clients ?? []).map(async (c) => ({ ...c, risk: await clientRisk(ctx, c.id) })),
+  );
+  return {
+    clients: scored
+      .filter((c) => c.risk.level !== "low")
+      .sort((a, b) => b.risk.score - a.risk.score)
+      .slice(0, 10),
+  };
 }
 
 export async function dashboardSummary(ctx: ToolCtx) {
