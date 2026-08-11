@@ -1,8 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateText, stepCountIs, tool } from "ai";
 import { z } from "zod";
-import { createLovableAiGatewayProvider, DUELY_MODEL } from "./ai-gateway.server";
-import { TOOL_AUTONOMY, executeTool, dashboardSummary, type ToolCtx } from "./duely-tools.server";
+import { getDuelyModel, hasAiProvider } from "./ai-provider.server";
+import { TOOL_AUTONOMY, executeTool, dashboardSummary, atRiskClients, type ToolCtx } from "./duely-tools.server";
+import { syncNotifications } from "./finance.server";
 
 export type PendingAction = {
   id: string;
@@ -24,6 +25,9 @@ const TITLES: Record<string, string> = {
   send_invoice: "Send Invoice",
   send_reminder: "Send Reminder",
   update_company_policy: "Update Company Policy",
+  create_payment_plan: "Create Payment Plan",
+  cancel_payment_plan: "Cancel Payment Plan",
+  reverse_payment: "Reverse Payment",
 };
 
 function describe(params: Record<string, unknown>) {
@@ -35,12 +39,19 @@ function describe(params: Record<string, unknown>) {
     }));
 }
 
-async function buildContext(ctx: ToolCtx, page: string, focus: { type: string; id: string; summary?: string } | null) {
-  const [{ data: profile }, { data: policies }, summary, { data: clients }] = await Promise.all([
+async function buildContext(
+  ctx: ToolCtx,
+  page: string,
+  focus: { type: string; id: string; summary?: string } | null,
+  selection: { type: string; id: string }[],
+) {
+  const [{ data: profile }, { data: policies }, summary, { data: clients }, notifications, risk] = await Promise.all([
     ctx.supabase.from("profiles").select("*").eq("id", ctx.userId).maybeSingle(),
     ctx.supabase.from("company_policies").select("policy_key,policy_value"),
     dashboardSummary(ctx),
     ctx.supabase.from("clients").select("id,name,company_name,email").limit(50),
+    syncNotifications(ctx),
+    atRiskClients(ctx),
   ]);
 
   let focusDetail: unknown = null;
@@ -63,14 +74,35 @@ async function buildContext(ctx: ToolCtx, page: string, focus: { type: string; i
     memory = m ?? [];
   }
 
+  const selectedInvoiceIds = selection.filter((s) => s.type === "invoice").map((s) => s.id);
+  const selectedClientIds = selection.filter((s) => s.type === "client").map((s) => s.id);
+  const selected: Record<string, unknown> = {};
+  if (selectedInvoiceIds.length) {
+    const { data } = await ctx.supabase
+      .from("invoices")
+      .select("id,invoice_number,amount,remaining_balance,currency,status,due_date, clients(id,name)")
+      .in("id", selectedInvoiceIds);
+    selected['invoices'] = data ?? [];
+  }
+  if (selectedClientIds.length) {
+    const { data } = await ctx.supabase
+      .from("clients")
+      .select("id,name,company_name,email,status")
+      .in("id", selectedClientIds);
+    selected['clients'] = data ?? [];
+  }
+
   return {
     user: { id: ctx.userId, name: profile?.full_name, company: profile?.company_name, currency: profile?.currency },
     current_page: page,
     current_focus: focus ? { ...focus, detail: focusDetail } : null,
+    current_selection: selection.length ? selected : null,
     company_policies: policies ?? [],
     relevant_client_memory: memory,
     clients_directory: clients ?? [],
     financial_snapshot: summary,
+    unread_notifications: (notifications.notifications ?? []).slice(0, 15),
+    at_risk_clients: risk.clients,
     today: new Date().toISOString().slice(0, 10),
   };
 }
@@ -81,7 +113,9 @@ RULES
 - You act only through the provided tools. Never claim an action happened unless a tool returned success.
 - Never invent clients, invoices, payments, amounts or dates. If data is missing, say so or ask.
 - Ask only for genuinely missing information; use company policies for defaults (payment terms, currency, tone).
-- Some tools require the owner's approval (send_invoice, send_reminder, update_company_policy). When you call them, the system prepares an approval card — tell the user it is awaiting their approval; never say it was sent.
+- Some tools require the owner's approval (send_invoice, send_reminder, update_company_policy, create_payment_plan, cancel_payment_plan, reverse_payment). When you call them, the system prepares an approval card — tell the user it is awaiting their approval; never say it happened.
+- Payment plans: use create_payment_plan for installment arrangements, record_installment_payment when an installment is paid, and get_payment_plan to report accurate balances. Never compute balances yourself — read them from tool results.
+- Risk: use get_client_risk / list_at_risk_clients when asked about reliability, chasing, or who to follow up with. Report the score, level and the factors returned.
 - Never cancel debt, grant major concessions, handle legal disputes or terminate a client relationship. Explain that these require the owner to act manually.
 - External sending is SIMULATED in this version. When something is "sent", state clearly that it is simulated.
 - For reminders: call generate_reminder with a complete, professional message you wrote yourself in the requested tone (friendly / professional / firm), in the client's language.
@@ -95,10 +129,10 @@ export async function runOrchestrator(args: {
   sessionId: string;
   page: string;
   focus: { type: string; id: string; summary?: string } | null;
+  selection?: { type: string; id: string }[];
 }): Promise<ChatResult> {
   const ctx: ToolCtx = { supabase: args.supabase, userId: args.userId };
-  const apiKey = process.env["LOVABLE_API_KEY"];
-  if (!apiKey) return { reply: "AI is not configured yet.", pending: [], performed: [] };
+  if (!hasAiProvider()) return { reply: "AI is not configured yet.", pending: [], performed: [] };
 
   await ctx.supabase.from("ai_conversations").insert({
     owner_id: args.userId,
@@ -115,7 +149,7 @@ export async function runOrchestrator(args: {
     .order("created_at", { ascending: true })
     .limit(20);
 
-  const contextObject = await buildContext(ctx, args.page, args.focus);
+  const contextObject = await buildContext(ctx, args.page, args.focus, args.selection ?? []);
   const pending: PendingAction[] = [];
   const performed: { tool: string; autonomy: string; status: string }[] = [];
 
@@ -164,6 +198,8 @@ export async function runOrchestrator(args: {
           confidence: 0.96,
           status: (result as { error?: string })?.error ? "failed" : "completed",
           result: result as never,
+          origin: "ai",
+          new_state: result as never,
         });
         performed.push({ tool: name, autonomy, status: (result as { error?: string })?.error ? "failed" : "completed" });
         return result;
@@ -298,14 +334,72 @@ export async function runOrchestrator(args: {
         memory_value: z.any(),
       }),
     ),
+    create_payment_plan: makeTool(
+      "create_payment_plan",
+      "Create an installment payment plan for a client, optionally tied to an invoice (requires owner approval)",
+      z.object({
+        ...clientRef,
+        invoice_id: z.string().optional(),
+        total_amount: z.number().optional(),
+        currency: z.string().optional(),
+        installment_count: z.number(),
+        frequency: z.enum(["weekly", "biweekly", "monthly", "quarterly"]).optional(),
+        start_date: z.string().optional(),
+        notes: z.string().optional(),
+      }),
+    ),
+    list_payment_plans: makeTool(
+      "list_payment_plans",
+      "List payment plans, optionally by client or status",
+      z.object({ client_id: z.string().optional(), status: z.string().optional() }),
+    ),
+    get_payment_plan: makeTool(
+      "get_payment_plan",
+      "Get one payment plan with its installments and up-to-date balances",
+      z.object({ plan_id: z.string() }),
+    ),
+    cancel_payment_plan: makeTool(
+      "cancel_payment_plan",
+      "Cancel a payment plan (requires owner approval)",
+      z.object({ plan_id: z.string() }),
+    ),
+    record_installment_payment: makeTool(
+      "record_installment_payment",
+      "Record a payment against a specific payment plan installment",
+      z.object({
+        installment_id: z.string(),
+        amount: z.number().optional(),
+        payment_date: z.string().optional(),
+        payment_method: z.string().optional(),
+        reference: z.string().optional(),
+      }),
+    ),
+    reverse_payment: makeTool(
+      "reverse_payment",
+      "Reverse a previously recorded payment (requires owner approval)",
+      z.object({ payment_id: z.string() }),
+    ),
+    get_client_risk: makeTool(
+      "get_client_risk",
+      "Payment-risk score and factors for one client",
+      z.object(clientRef),
+    ),
+    list_at_risk_clients: makeTool(
+      "list_at_risk_clients",
+      "List clients with medium or high payment risk",
+      z.object({}),
+    ),
+    list_notifications: makeTool(
+      "list_notifications",
+      "Refresh and list unread financial notifications (due soon, overdue, installments)",
+      z.object({}),
+    ),
   };
-
-  const gateway = createLovableAiGatewayProvider(apiKey);
 
   let reply = "";
   try {
     const result = await generateText({
-      model: gateway(DUELY_MODEL),
+      model: getDuelyModel(),
       system: `${SYSTEM}\n\nCURRENT CONTEXT (JSON):\n${JSON.stringify(contextObject)}`,
       messages: (history ?? []).map((h) => ({
         role: h.role === "assistant" ? ("assistant" as const) : ("user" as const),

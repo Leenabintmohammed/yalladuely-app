@@ -18,7 +18,7 @@ function newId() {
 
 export function CommandCenter({ className }: { className?: string }) {
   const { t, lang } = useI18n();
-  const { focus, page, prefill, setPrefill } = useDuely();
+  const { focus, selection, page, prefill, setPrefill } = useDuely();
   const queryClient = useQueryClient();
   const chat = useServerFn(duelyChat);
   const resolve = useServerFn(resolveAction);
@@ -57,6 +57,7 @@ export function CommandCenter({ className }: { className?: string }) {
           session_id: sessionId,
           page,
           focus: focus ? { type: focus.type, id: focus.id, summary: focus.summary } : null,
+          selection: selection.map((s) => ({ type: s.type, id: s.id })),
         },
       }),
     onSuccess: (result) => {

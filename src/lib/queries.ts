@@ -104,6 +104,39 @@ export function useReminders(invoiceId?: string) {
   });
 }
 
+export function usePaymentPlans(clientId?: string) {
+  return useQuery({
+    queryKey: ["payment_plans", clientId],
+    queryFn: async () => {
+      let q = supabase
+        .from("payment_plans")
+        .select("*, clients(name,company_name), payment_plan_installments(*)")
+        .order("created_at", { ascending: false });
+      if (clientId) q = q.eq("client_id", clientId);
+      const { data, error } = await q;
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+}
+
+export function useNotifications() {
+  return useQuery({
+    queryKey: ["notifications"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("notifications")
+        .select("*")
+        .is("read_at", null)
+        .order("created_at", { ascending: false })
+        .limit(50);
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+}
+
+
 export type InvoiceRow = {
   id: string;
   invoice_number: string;

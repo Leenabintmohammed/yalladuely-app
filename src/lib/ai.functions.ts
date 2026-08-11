@@ -10,6 +10,7 @@ const ChatInput = z.object({
     .object({ type: z.string(), id: z.string(), summary: z.string().optional() })
     .nullable()
     .optional(),
+  selection: z.array(z.object({ type: z.string(), id: z.string() })).optional(),
 });
 
 export type PendingAction = {
@@ -43,6 +44,7 @@ export const duelyChat = createServerFn({ method: "POST" })
       sessionId: data.session_id,
       page: data.page ?? "dashboard",
       focus,
+      selection: data.selection ?? [],
     });
   });
 
@@ -72,7 +74,12 @@ export const resolveAction = createServerFn({ method: "POST" })
     });
     await context.supabase
       .from("ai_actions")
-      .update({ status: "completed", result: result as never })
+      .update({
+        status: (result as { error?: string })?.error ? "failed" : "completed",
+        result: result as never,
+        new_state: result as never,
+        origin: "human_approved",
+      })
       .eq("id", action.id);
     return { status: "completed" as const, message: JSON.stringify(result) };
   });
