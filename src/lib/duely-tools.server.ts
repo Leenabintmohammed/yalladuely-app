@@ -539,73 +539,60 @@ export async function executeTool(name: string, params: Record<string, unknown>,
     }
     case "cancel_payment_plan": {
       const id = p['plan_id'] as string;
-      if (!id) return { error: "missing_plan_id" };
-      const { data, error } = await ctx.supabase
-        .from("payment_plans")
-        .update({ status: "cancelled" })
-        .eq("id", id)
-        .select("*")
-        .single();
-      if (error) return { error: error.message };
-      return { cancelled: true, plan: data };
+      if (!id) return fail("validation_failed", "plan_id is required.");
+      const result = await setPlanStatus(ctx, id, "cancelled", (p['reason'] as string) ?? undefined);
+      if (isFailure(result)) return result;
+      return { cancelled: true, plan: result.plan };
+    }
+    case "pause_payment_plan": {
+      const id = p['plan_id'] as string;
+      if (!id) return fail("validation_failed", "plan_id is required.");
+      return await setPlanStatus(ctx, id, "paused", (p['reason'] as string) ?? undefined);
+    }
+    case "resume_payment_plan": {
+      const id = p['plan_id'] as string;
+      if (!id) return fail("validation_failed", "plan_id is required.");
+      const resumed = await setPlanStatus(ctx, id, "active");
+      if (isFailure(resumed)) return resumed;
+      return await recalcPlan(ctx, id);
     }
     case "record_installment_payment": {
       const installmentId = p['installment_id'] as string;
-      if (!installmentId) return { error: "missing_installment_id" };
+      if (!installmentId) return fail("validation_failed", "installment_id is required.");
       const { data: inst } = await ctx.supabase
         .from("payment_plan_installments")
         .select("*, payment_plans(id,client_id,invoice_id,currency)")
         .eq("id", installmentId)
         .maybeSingle();
-      if (!inst) return { error: "installment_not_found" };
+      if (!inst) return fail("not_found", "Installment not found.", { installment_id: installmentId });
       const plan = inst.payment_plans as {
         id: string;
         client_id: string;
         invoice_id: string | null;
         currency: string;
       } | null;
-      const amount = num(p['amount']) || Math.max(0, num(inst.amount) - num(inst.paid_amount));
-      if (!amount) return { error: "missing_amount" };
-      const { data: payment, error } = await ctx.supabase
-        .from("payments")
-        .insert({
-          owner_id: ctx.userId,
-          invoice_id: plan?.invoice_id ?? null,
-          client_id: plan?.client_id ?? null,
-          plan_id: plan?.id ?? inst.plan_id,
-          installment_id: installmentId,
-          amount,
-          currency: plan?.currency ?? (await defaultCurrency(ctx)),
-          payment_date: (p['payment_date'] as string) ?? today(),
-          payment_method: (p['payment_method'] as string) ?? null,
-          reference: (p['reference'] as string) ?? null,
-        })
-        .select("*")
-        .single();
-      if (error) return { error: error.message };
-      const state = await recalcPlan(ctx, inst.plan_id);
-      await notifyPaymentReceived(ctx, {
-        payment_id: payment.id,
-        invoice_id: payment.invoice_id,
-        client_id: payment.client_id,
+      const amount = round2(num(p['amount']) || Math.max(0, num(inst.amount) - num(inst.paid_amount)));
+      if (!amount) return fail("validation_failed", "This installment is already fully paid.");
+      const recorded = await recordPayment(ctx, {
+        invoice_id: plan?.invoice_id ?? null,
+        client_id: plan?.client_id ?? null,
+        plan_id: plan?.id ?? inst.plan_id,
+        installment_id: installmentId,
         amount,
-        currency: payment.currency,
+        currency: plan?.currency ?? (await defaultCurrency(ctx)),
+        payment_date: (p['payment_date'] as string) ?? today(),
+        payment_method: (p['payment_method'] as string) ?? null,
+        reference: (p['reference'] as string) ?? null,
+        idempotency_key: (p['idempotency_key'] as string) ?? null,
+        allow_overpayment: true,
       });
-      return { recorded: true, ...state };
+      if (isFailure(recorded)) return recorded;
+      return { recorded: true, ...(await recalcPlan(ctx, inst.plan_id)) };
     }
     case "reverse_payment": {
       const id = p['payment_id'] as string;
-      if (!id) return { error: "missing_payment_id" };
-      const { data: pay, error } = await ctx.supabase
-        .from("payments")
-        .update({ reversed_at: new Date().toISOString() })
-        .eq("id", id)
-        .select("*")
-        .single();
-      if (error) return { error: error.message };
-      if (pay.invoice_id) await syncInvoice(ctx, pay.invoice_id);
-      if (pay.plan_id) await recalcPlan(ctx, pay.plan_id);
-      return { reversed: true, payment: pay };
+      if (!id) return fail("validation_failed", "payment_id is required.");
+      return await reversePayment(ctx, id, (p['reason'] as string) ?? undefined);
     }
     case "get_client_risk": {
       const client = await resolveClient(ctx, p as never);
@@ -619,8 +606,20 @@ export async function executeTool(name: string, params: Record<string, unknown>,
     case "list_notifications": {
       return await syncNotifications(ctx);
     }
+    case "list_audit_log": {
+      let q = ctx.supabase
+        .from("audit_logs")
+        .select("*")
+        .eq("owner_id", ctx.userId)
+        .order("created_at", { ascending: false })
+        .limit(Math.min(100, Math.max(1, num(p['limit'], 25))));
+      if (p['entity_type']) q = q.eq("entity_type", p['entity_type'] as string);
+      if (p['entity_id']) q = q.eq("entity_id", p['entity_id'] as string);
+      const { data } = await q;
+      return { audit_log: data ?? [] };
+    }
     default:
-      return { error: `unknown_tool:${name}` };
+      return fail("validation_failed", `Unknown tool: ${name}`, { tool: name });
   }
 }
 
