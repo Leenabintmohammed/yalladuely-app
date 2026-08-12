@@ -157,6 +157,12 @@ export async function refreshOverdue(ctx: ToolCtx) {
 
 export async function executeTool(name: string, params: Record<string, unknown>, ctx: ToolCtx): Promise<unknown> {
   const p = params ?? {};
+  if (TOOL_AUTONOMY[name] === "human_only")
+    return fail(
+      "forbidden",
+      "This action can only be performed manually by the business owner and is not available to the assistant.",
+      { tool: name },
+    );
   switch (name) {
     case "create_client": {
       const { data, error } = await ctx.supabase
