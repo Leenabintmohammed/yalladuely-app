@@ -394,6 +394,36 @@ export async function runOrchestrator(args: {
       "Refresh and list unread financial notifications (due soon, overdue, installments)",
       z.object({}),
     ),
+    cancel_invoice: makeTool(
+      "cancel_invoice",
+      "Cancel an invoice (requires owner approval)",
+      z.object({ invoice_id: z.string() }),
+    ),
+    update_invoice_items: makeTool(
+      "update_invoice_items",
+      "Replace the line items of a DRAFT invoice; totals, discount and tax are recalculated automatically",
+      z.object({
+        invoice_id: z.string(),
+        items: z.array(
+          z.object({ description: z.string(), quantity: z.number().optional(), unit_price: z.number().optional() }),
+        ),
+      }),
+    ),
+    pause_payment_plan: makeTool(
+      "pause_payment_plan",
+      "Pause a payment plan (requires owner approval)",
+      z.object({ plan_id: z.string(), reason: z.string().optional() }),
+    ),
+    resume_payment_plan: makeTool(
+      "resume_payment_plan",
+      "Resume a paused payment plan (requires owner approval)",
+      z.object({ plan_id: z.string() }),
+    ),
+    list_audit_log: makeTool(
+      "list_audit_log",
+      "Read the audit trail of financial changes, optionally filtered by entity",
+      z.object({ entity_type: z.string().optional(), entity_id: z.string().optional(), limit: z.number().optional() }),
+    ),
   };
 
   let reply = "";
