@@ -348,12 +348,12 @@ export async function executeTool(name: string, params: Record<string, unknown>,
     }
     case "record_payment": {
       const amount = num(p['amount']);
-      if (!amount) return { error: "missing_amount" };
+      if (!amount) return fail("validation_failed", "A payment amount is required.");
       let invoiceId = p['invoice_id'] as string | undefined;
       let client = null as Record<string, unknown> | null;
       if (!invoiceId) {
         client = (await resolveClient(ctx, p as never)) as Record<string, unknown> | null;
-        if (!client) return { error: "client_not_found" };
+        if (!client) return fail("not_found", "No matching client was found.");
         if ("__ambiguous" in client) return { error: "multiple_clients_match", candidates: client['__ambiguous'] };
         const { data: open } = await ctx.supabase
           .from("invoices")
@@ -361,54 +361,23 @@ export async function executeTool(name: string, params: Record<string, unknown>,
           .eq("client_id", client['id'] as string)
           .not("status", "in", "(paid,cancelled,draft)")
           .order("due_date", { ascending: true });
-        if (!open || open.length === 0) return { error: "no_open_invoices", client: client['name'] };
+        if (!open || open.length === 0)
+          return fail("not_found", `${client['name']} has no open invoices to pay.`, { client: client['name'] });
         if (open.length > 1) return { error: "multiple_open_invoices", options: open };
         invoiceId = open[0]!.id;
       }
-      const { data: inv } = await ctx.supabase.from("invoices").select("*").eq("id", invoiceId!).maybeSingle();
-      if (!inv) return { error: "invoice_not_found" };
-      const { data: payment, error } = await ctx.supabase
-        .from("payments")
-        .insert({
-        owner_id: ctx.userId,
+      return await recordPayment(ctx, {
         invoice_id: invoiceId!,
-        client_id: inv.client_id,
+        plan_id: (p['plan_id'] as string) ?? null,
+        installment_id: (p['installment_id'] as string) ?? null,
         amount,
-        currency: inv.currency,
         payment_date: (p['payment_date'] as string) ?? today(),
         payment_method: (p['payment_method'] as string) ?? null,
         reference: (p['reference'] as string) ?? null,
         notes: (p['notes'] as string) ?? null,
-          plan_id: (p['plan_id'] as string) ?? null,
-          installment_id: (p['installment_id'] as string) ?? null,
-        })
-        .select("*")
-        .single();
-      if (error) return { error: error.message };
-      const updated = await syncInvoice(ctx, invoiceId!);
-      if (payment?.plan_id) await recalcPlan(ctx, payment.plan_id);
-      if (payment)
-        await notifyPaymentReceived(ctx, {
-          payment_id: payment.id,
-          invoice_id: payment.invoice_id,
-          client_id: payment.client_id,
-          amount,
-          currency: payment.currency,
-        });
-      const late = updated ? Math.floor((Date.now() - new Date(inv.due_date).getTime()) / 86400000) : 0;
-      await ctx.supabase.from("client_memory").upsert(
-        {
-          owner_id: ctx.userId,
-          client_id: inv.client_id,
-          memory_type: "payment_behavior",
-          memory_key: "last_payment_delay_days",
-          memory_value: { days: late, invoice: inv.invoice_number, amount },
-          confidence: 1,
-          source: "system",
-        },
-        { onConflict: "owner_id,client_id,memory_key" },
-      );
-      return { recorded: true, invoice: updated };
+        idempotency_key: (p['idempotency_key'] as string) ?? null,
+        allow_overpayment: p['allow_overpayment'] === true,
+      });
     }
     case "get_outstanding_balance": {
       await refreshOverdue(ctx);
