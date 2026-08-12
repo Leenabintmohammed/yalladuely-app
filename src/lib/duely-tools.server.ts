@@ -433,14 +433,10 @@ export async function executeTool(name: string, params: Record<string, unknown>,
     }
     case "send_invoice": {
       const id = p['invoice_id'] as string;
-      const { data, error } = await ctx.supabase
-        .from("invoices")
-        .update({ status: "sent" })
-        .eq("id", id)
-        .select("*")
-        .single();
-      if (error) return { error: error.message };
-      return { sent: true, simulated: true, invoice: data };
+      if (!id) return fail("validation_failed", "invoice_id is required.");
+      const moved = await setInvoiceStatus(ctx, id, "sent");
+      if (isFailure(moved)) return moved;
+      return { sent: true, simulated: true, invoice: moved.invoice };
     }
     case "send_reminder": {
       const id = p['reminder_id'] as string;
