@@ -214,41 +214,117 @@ export async function executeTool(name: string, params: Record<string, unknown>,
       const client = await resolveClient(ctx, p as never);
       if (!client) return { error: "client_not_found", hint: "Ask the user to confirm the client, or create it first." };
       if ("__ambiguous" in client) return { error: "multiple_clients_match", candidates: client['__ambiguous'] };
-      const amount = num(p['amount']);
-      if (!amount) return { error: "missing_amount" };
+      const rawItems = (p['items'] as { description?: string; amount?: number; quantity?: number; unit_price?: number }[] | undefined) ?? null;
+      const totals = computeInvoiceTotals({
+        items: rawItems?.length
+          ? rawItems
+          : [{ description: (p['description'] as string) ?? "Services", amount: num(p['amount']) }],
+        discount_type: (p['discount_type'] as string) ?? "none",
+        discount_value: num(p['discount_value']),
+        tax_rate: num(p['tax_rate']),
+      });
+      if (!(totals.total > 0)) return fail("validation_failed", "Invoice total must be greater than zero.");
       const currency = (p['currency'] as string) ?? (await defaultCurrency(ctx));
       const terms = p['due_in_days'] !== undefined ? num(p['due_in_days'], 30) : await defaultTerms(ctx);
       const due = (p['due_date'] as string) ?? addDays(terms);
+      const issue = (p['issue_date'] as string) ?? today();
+      if (due < issue) return fail("validation_failed", "Due date cannot be before the issue date.");
       const { data, error } = await ctx.supabase
         .from("invoices")
         .insert({
           owner_id: ctx.userId,
           client_id: client['id'],
           invoice_number: (p['invoice_number'] as string) ?? (await nextInvoiceNumber(ctx)),
-          amount,
+          amount: totals.total,
+          subtotal: totals.subtotal,
+          discount_type: totals.discount_type,
+          discount_value: totals.discount_value,
+          discount_amount: totals.discount_amount,
+          tax_rate: totals.tax_rate,
+          tax_amount: totals.tax_amount,
           currency,
           status: "draft",
-          issue_date: (p['issue_date'] as string) ?? today(),
+          issue_date: issue,
           due_date: due,
-          remaining_balance: amount,
-          items: (p['items'] as unknown[]) ?? [{ description: (p['description'] as string) ?? "Services", amount }],
+          remaining_balance: totals.total,
+          items: totals.items as never,
           notes: (p['notes'] as string) ?? null,
         })
         .select("*")
         .single();
-      if (error) return { error: error.message };
+      if (error) return fail("internal_error", error.message);
+      if (totals.items.length)
+        await ctx.supabase.from("invoice_items").insert(
+          totals.items.map((it, i) => ({
+            owner_id: ctx.userId,
+            invoice_id: data.id,
+            description: it.description,
+            quantity: it.quantity,
+            unit_price: it.unit_price,
+            line_total: it.line_total,
+            sort_order: i,
+          })),
+        );
+      await audit(ctx, {
+        entity_type: "invoice",
+        entity_id: data.id,
+        action: "invoice.created",
+        after_state: { amount: totals.total, currency, due_date: due },
+      });
       return { created: true, invoice: data, client_name: client['name'] };
     }
     case "update_invoice": {
       const id = p['invoice_id'] as string;
-      if (!id) return { error: "missing_invoice_id" };
+      if (!id) return fail("validation_failed", "invoice_id is required.");
+      const { data: current } = await ctx.supabase.from("invoices").select("*").eq("id", id).maybeSingle();
+      if (!current) return fail("not_found", "Invoice not found.", { invoice_id: id });
+      const financialKeys = ["amount", "items", "currency", "discount_type", "discount_value", "tax_rate"];
+      const touchesMoney = financialKeys.some((k) => p[k] !== undefined);
+      if (touchesMoney && !isEditableInvoice(current.status))
+        return fail("invoice_locked", `Invoice ${current.invoice_number} is ${current.status}; its amounts are locked.`);
+      if (p['status'] !== undefined) {
+        const moved = await setInvoiceStatus(ctx, id, String(p['status']));
+        if (isFailure(moved)) return moved;
+      }
       const patch: Record<string, unknown> = {};
-      for (const k of ["amount", "currency", "due_date", "issue_date", "notes", "items", "status"])
+      for (const k of ["currency", "due_date", "issue_date", "notes"])
         if (p[k] !== undefined) patch[k] = p[k];
-      const { data, error } = await ctx.supabase.from("invoices").update(patch).eq("id", id).select("*").single();
-      if (error) return { error: error.message };
+      if (Object.keys(patch).length) {
+        const { error } = await ctx.supabase.from("invoices").update(patch).eq("id", id).select("*").single();
+        if (error) return fail("internal_error", error.message);
+      }
+      if (p['amount'] !== undefined || p['discount_type'] !== undefined || p['discount_value'] !== undefined || p['tax_rate'] !== undefined || p['items'] !== undefined) {
+        const recalculated = await recalcInvoiceTotals(ctx, id, {
+          ...(p['items'] !== undefined ? { items: p['items'] as never } : {}),
+          ...(p['items'] === undefined && p['amount'] !== undefined ? { items: null, subtotal: num(p['amount']) } : {}),
+          ...(p['discount_type'] !== undefined ? { discount_type: String(p['discount_type']) } : {}),
+          ...(p['discount_value'] !== undefined ? { discount_value: num(p['discount_value']) } : {}),
+          ...(p['tax_rate'] !== undefined ? { tax_rate: num(p['tax_rate']) } : {}),
+        });
+        if (isFailure(recalculated)) return recalculated;
+      }
       await syncInvoice(ctx, id);
+      const { data } = await ctx.supabase.from("invoices").select("*").eq("id", id).maybeSingle();
+      await audit(ctx, {
+        entity_type: "invoice",
+        entity_id: id,
+        action: "invoice.updated",
+        before_state: { amount: current.amount, status: current.status, due_date: current.due_date },
+        after_state: { amount: data?.amount, status: data?.status, due_date: data?.due_date },
+      });
       return { updated: true, invoice: data };
+    }
+    case "update_invoice_items": {
+      const id = p['invoice_id'] as string;
+      if (!id) return fail("validation_failed", "invoice_id is required.");
+      const items = p['items'] as { description?: string; quantity?: number; unit_price?: number }[] | undefined;
+      if (!Array.isArray(items) || !items.length) return fail("validation_failed", "At least one line item is required.");
+      return await replaceInvoiceItems(ctx, id, items);
+    }
+    case "cancel_invoice": {
+      const id = p['invoice_id'] as string;
+      if (!id) return fail("validation_failed", "invoice_id is required.");
+      return await setInvoiceStatus(ctx, id, "cancelled");
     }
     case "get_invoice": {
       let q = ctx.supabase.from("invoices").select("*, clients(name,company_name,email)");
