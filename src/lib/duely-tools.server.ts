@@ -1,18 +1,30 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  audit,
   clientRisk,
   createPaymentPlan,
-  deriveInvoiceStatus,
-  notifyPaymentReceived,
   recalcInvoice,
+  recalcInvoiceTotals,
   recalcPlan,
+  recordPayment,
   refreshOverdueInvoices,
+  replaceInvoiceItems,
+  reversePayment,
+  setInvoiceStatus,
+  setPlanStatus,
   syncNotifications,
 } from "./finance.server";
+import {
+  computeInvoiceTotals,
+  deriveInvoiceStatus,
+  isEditableInvoice,
+  round2,
+} from "./finance-core";
+import { fail, isFailure } from "./finance-errors";
 
 export type Autonomy = "auto" | "approval_required" | "human_only";
 
-export type ToolCtx = { supabase: SupabaseClient; userId: string };
+export type ToolCtx = { supabase: SupabaseClient; userId: string; actor?: "ai" | "human" | "system" };
 
 export const TOOL_AUTONOMY: Record<string, Autonomy> = {
   create_client: "auto",
@@ -36,6 +48,10 @@ export const TOOL_AUTONOMY: Record<string, Autonomy> = {
   update_company_policy: "approval_required",
   create_payment_plan: "approval_required",
   cancel_payment_plan: "approval_required",
+  pause_payment_plan: "approval_required",
+  resume_payment_plan: "approval_required",
+  cancel_invoice: "approval_required",
+  update_invoice_items: "auto",
   reverse_payment: "approval_required",
   record_installment_payment: "auto",
   list_payment_plans: "auto",
@@ -43,6 +59,10 @@ export const TOOL_AUTONOMY: Record<string, Autonomy> = {
   get_client_risk: "auto",
   list_at_risk_clients: "auto",
   list_notifications: "auto",
+  list_audit_log: "auto",
+  write_off_invoice: "human_only",
+  delete_client: "human_only",
+  delete_invoice: "human_only",
 };
 
 function num(v: unknown, fallback = 0) {
