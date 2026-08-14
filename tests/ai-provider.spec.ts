@@ -18,7 +18,7 @@ describe('AI provider selection', () => {
     delete process.env.DUELY_AI_MODEL
   })
 
-  it('uses OPENAI_API_KEY and the default Terra model', async () => {
+  it('uses OPENAI_API_KEY and the default Luna model', async () => {
     process.env.OPENAI_API_KEY = 'test-key'
 
     const { getDuelyModel, hasAiProvider } = await import('../src/lib/ai-provider.server')
@@ -26,7 +26,7 @@ describe('AI provider selection', () => {
     expect(hasAiProvider()).toBe(true)
 
     const model = getDuelyModel()
-    expect(model).toMatchObject({ modelId: 'gpt-5.6-terra', provider: 'openai', apiKey: 'test-key' })
+    expect(model).toMatchObject({ modelId: 'gpt-5.6-luna', provider: 'openai', apiKey: 'test-key' })
     expect(createOpenAI).toHaveBeenCalledWith({ apiKey: 'test-key' })
   })
 

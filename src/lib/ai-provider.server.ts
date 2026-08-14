@@ -6,9 +6,9 @@ import type { LanguageModel } from "ai";
  * Swapping provider or model = change env vars, no orchestrator changes.
  */
 export const DUELY_MODELS = {
-  default: "gpt-5.6-terra",
+  default: "gpt-5.6-luna",
   reasoning: "gpt-5.6-sol",
-  fast: "gpt-5.6-luna",
+  fast: "gpt-5.6-terra",
 } as const;
 
 export function getDuelyModel(kind: keyof typeof DUELY_MODELS = "default"): LanguageModel {

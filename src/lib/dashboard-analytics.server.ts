@@ -594,13 +594,27 @@ export async function getDashboardNotifications(ctx: DashboardContext, limit = 2
   return (data ?? []) as DashboardNotificationRow[];
 }
 
-export async function getDashboardAnalytics(
-  ctx: DashboardContext,
-  options: DashboardAnalyticsOptions = {},
-): Promise<DashboardAnalyticsResult> {
-  const limit = options.limit ?? DEFAULT_LIMIT;
-  const today = todayISO();
+export type DashboardRawRows = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  invoices: any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  payments: any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  plans: any[];
+  notifications: DashboardNotificationRow[];
+};
 
+/**
+ * Fetches the full owner-scoped dataset once. Callers computing analytics for
+ * multiple clients/currencies should fetch once via this function (or reuse an
+ * existing fetch) and pass the rows to `computeDashboardAnalytics` per slice,
+ * instead of calling `getDashboardAnalytics` in a loop (which re-queries the
+ * entire dataset on every call).
+ */
+export async function fetchDashboardRows(
+  ctx: DashboardContext,
+  limit = DEFAULT_LIMIT,
+): Promise<DashboardRawRows> {
   const { data: invoices } = await ctx.supabase
     .from("invoices")
     .select("*, clients(id,name,company_name)")
@@ -620,6 +634,23 @@ export async function getDashboardAnalytics(
     .order("created_at", { ascending: false });
 
   const notifications = await getDashboardNotifications(ctx, limit);
+
+  return {
+    invoices: (invoices ?? []) as DashboardRawRows["invoices"],
+    payments: (payments ?? []) as DashboardRawRows["payments"],
+    plans: (plans ?? []) as DashboardRawRows["plans"],
+    notifications,
+  };
+}
+
+/** Pure computation over already-fetched rows. Safe to call repeatedly (e.g. per client/currency) without re-querying. */
+export function computeDashboardAnalytics(
+  rows: DashboardRawRows,
+  options: DashboardAnalyticsOptions = {},
+): DashboardAnalyticsResult {
+  const { invoices, payments, plans, notifications } = rows;
+  const limit = options.limit ?? DEFAULT_LIMIT;
+  const today = todayISO();
 
   const invoiceRows = (invoices ?? []).map((inv) => ({
     ...inv,
@@ -790,6 +821,14 @@ export async function getDashboardAnalytics(
   };
 }
 
+export async function getDashboardAnalytics(
+  ctx: DashboardContext,
+  options: DashboardAnalyticsOptions = {},
+): Promise<DashboardAnalyticsResult> {
+  const rows = await fetchDashboardRows(ctx, options.limit ?? DEFAULT_LIMIT);
+  return computeDashboardAnalytics(rows, options);
+}
+
 export const dashboardAnalytics = {
   getOutstandingReceivables,
   getOverdueReceivables,
@@ -800,5 +839,7 @@ export const dashboardAnalytics = {
   getAtRiskClients,
   getPaymentPlanSummary,
   getDashboardNotifications,
+  fetchDashboardRows,
+  computeDashboardAnalytics,
   getDashboardAnalytics,
 };

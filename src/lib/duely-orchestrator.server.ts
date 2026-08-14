@@ -3,7 +3,13 @@ import { generateText, stepCountIs, tool } from "ai";
 import { z } from "zod";
 import { getDuelyModel, hasAiProvider } from "./ai-provider.server";
 import { buildApprovalActionInput } from "./ai.functions";
-import { TOOL_AUTONOMY, executeTool, dashboardSummary, atRiskClients, type ToolCtx } from "./duely-tools.server";
+import {
+  TOOL_AUTONOMY,
+  executeTool,
+  dashboardSummary,
+  atRiskClients,
+  type ToolCtx,
+} from "./duely-tools.server";
 import { syncNotifications } from "./finance.server";
 
 export type PendingAction = {
@@ -46,14 +52,22 @@ async function buildContext(
   focus: { type: string; id: string; summary?: string } | null,
   selection: { type: string; id: string }[],
 ) {
-  const [{ data: profile }, { data: policies }, summary, { data: clients }, notifications, risk] = await Promise.all([
-    ctx.supabase.from("profiles").select("*").eq("id", ctx.userId).maybeSingle(),
-    ctx.supabase.from("company_policies").select("policy_key,policy_value").eq("owner_id", ctx.userId),
-    dashboardSummary(ctx),
-    ctx.supabase.from("clients").select("id,name,company_name,email").eq("owner_id", ctx.userId).limit(50),
-    syncNotifications(ctx),
-    atRiskClients(ctx),
-  ]);
+  const [{ data: profile }, { data: policies }, summary, { data: clients }, notifications, risk] =
+    await Promise.all([
+      ctx.supabase.from("profiles").select("*").eq("id", ctx.userId).maybeSingle(),
+      ctx.supabase
+        .from("company_policies")
+        .select("policy_key,policy_value")
+        .eq("owner_id", ctx.userId),
+      dashboardSummary(ctx),
+      ctx.supabase
+        .from("clients")
+        .select("id,name,company_name,email")
+        .eq("owner_id", ctx.userId)
+        .limit(50),
+      syncNotifications(ctx),
+      atRiskClients(ctx),
+    ]);
 
   let focusDetail: unknown = null;
   let memory: unknown[] = [];
@@ -87,18 +101,38 @@ async function buildContext(
       .eq("owner_id", ctx.userId)
       .eq("client_id", focus.id);
     memory = m ?? [];
+  } else if (focus?.type === "payment") {
+    const { data } = await ctx.supabase
+      .from("payments")
+      .select("*")
+      .eq("id", focus.id)
+      .eq("owner_id", ctx.userId)
+      .maybeSingle();
+    focusDetail = data;
+  } else if (focus?.type === "payment_plan") {
+    const { data } = await ctx.supabase
+      .from("payment_plans")
+      .select("*, payment_plan_installments(*)")
+      .eq("id", focus.id)
+      .eq("owner_id", ctx.userId)
+      .maybeSingle();
+    focusDetail = data;
   }
 
   const selectedInvoiceIds = selection.filter((s) => s.type === "invoice").map((s) => s.id);
   const selectedClientIds = selection.filter((s) => s.type === "client").map((s) => s.id);
+  const selectedPaymentIds = selection.filter((s) => s.type === "payment").map((s) => s.id);
+  const selectedPlanIds = selection.filter((s) => s.type === "payment_plan").map((s) => s.id);
   const selected: Record<string, unknown> = {};
   if (selectedInvoiceIds.length) {
     const { data } = await ctx.supabase
       .from("invoices")
-      .select("id,invoice_number,amount,remaining_balance,currency,status,due_date, clients(id,name)")
+      .select(
+        "id,invoice_number,amount,remaining_balance,currency,status,due_date, clients(id,name)",
+      )
       .eq("owner_id", ctx.userId)
       .in("id", selectedInvoiceIds);
-    selected['invoices'] = data ?? [];
+    selected["invoices"] = data ?? [];
   }
   if (selectedClientIds.length) {
     const { data } = await ctx.supabase
@@ -106,11 +140,36 @@ async function buildContext(
       .select("id,name,company_name,email,status")
       .eq("owner_id", ctx.userId)
       .in("id", selectedClientIds);
-    selected['clients'] = data ?? [];
+    selected["clients"] = data ?? [];
+  }
+  if (selectedPaymentIds.length) {
+    const { data } = await ctx.supabase
+      .from("payments")
+      .select(
+        "id,amount,currency,payment_date,payment_method,reference,invoice_id,client_id,reversed_at",
+      )
+      .eq("owner_id", ctx.userId)
+      .in("id", selectedPaymentIds);
+    selected["payments"] = data ?? [];
+  }
+  if (selectedPlanIds.length) {
+    const { data } = await ctx.supabase
+      .from("payment_plans")
+      .select(
+        "id,client_id,invoice_id,total_amount,paid_amount,remaining_amount,currency,status,payment_plan_installments(*)",
+      )
+      .eq("owner_id", ctx.userId)
+      .in("id", selectedPlanIds);
+    selected["payment_plans"] = data ?? [];
   }
 
   return {
-    user: { id: ctx.userId, name: profile?.full_name, company: profile?.company_name, currency: profile?.currency },
+    user: {
+      id: ctx.userId,
+      name: profile?.full_name,
+      company: profile?.company_name,
+      currency: profile?.currency,
+    },
     current_page: page,
     current_focus: focus ? { ...focus, detail: focusDetail } : null,
     current_selection: selection.length ? selected : null,
@@ -224,7 +283,7 @@ export async function runOrchestrator(args: {
         }
         const result = await executeTool(name, params, ctx);
         const completionStatus = (result as { error?: string })?.error ? "failed" : "completed";
-        
+
         await ctx.supabase.from("ai_actions").insert({
           owner_id: args.userId,
           intent: name,
@@ -333,7 +392,11 @@ export async function runOrchestrator(args: {
       "Get total outstanding balance, optionally for one client",
       z.object({ client_id: z.string().optional() }),
     ),
-    list_overdue_invoices: makeTool("list_overdue_invoices", "List all overdue invoices", z.object({})),
+    list_overdue_invoices: makeTool(
+      "list_overdue_invoices",
+      "List all overdue invoices",
+      z.object({}),
+    ),
     generate_reminder: makeTool(
       "generate_reminder",
       "Draft a payment reminder message for an invoice. You must supply the full message text.",
@@ -349,7 +412,11 @@ export async function runOrchestrator(args: {
       "Send a previously drafted reminder (requires owner approval, simulated sending)",
       z.object({ reminder_id: z.string() }),
     ),
-    get_dashboard_summary: makeTool("get_dashboard_summary", "Financial overview of the business", z.object({})),
+    get_dashboard_summary: makeTool(
+      "get_dashboard_summary",
+      "Financial overview of the business",
+      z.object({}),
+    ),
     get_client_financial_summary: makeTool(
       "get_client_financial_summary",
       "Financial history and payment behaviour of one client",
@@ -442,7 +509,11 @@ export async function runOrchestrator(args: {
       z.object({
         invoice_id: z.string(),
         items: z.array(
-          z.object({ description: z.string(), quantity: z.number().optional(), unit_price: z.number().optional() }),
+          z.object({
+            description: z.string(),
+            quantity: z.number().optional(),
+            unit_price: z.number().optional(),
+          }),
         ),
       }),
     ),
@@ -459,33 +530,41 @@ export async function runOrchestrator(args: {
     list_audit_log: makeTool(
       "list_audit_log",
       "Read the audit trail of financial changes, optionally filtered by entity",
-      z.object({ entity_type: z.string().optional(), entity_id: z.string().optional(), limit: z.number().optional() }),
+      z.object({
+        entity_type: z.string().optional(),
+        entity_id: z.string().optional(),
+        limit: z.number().optional(),
+      }),
     ),
-     list_client_invoices: makeTool(
-       "list_client_invoices",
-       "List all invoices for a specific client",
-       z.object({ client_id: z.string() }),
-     ),
-     list_payment_history: makeTool(
-       "list_payment_history",
-       "List payment history, optionally filtered by client or invoice",
-       z.object({ limit: z.number().optional(), client_id: z.string().optional(), invoice_id: z.string().optional() }),
-     ),
-     mark_notification_read: makeTool(
-       "mark_notification_read",
-       "Mark a notification as read",
-       z.object({ notification_id: z.string() }),
-     ),
-     get_pending_approvals: makeTool(
-       "get_pending_approvals",
-       "List all pending approvals waiting for owner action",
-       z.object({}),
-     ),
-     list_ai_action_history: makeTool(
-       "list_ai_action_history",
-       "List AI action history, optionally filtered by status",
-       z.object({ limit: z.number().optional(), status: z.string().optional() }),
-     ),
+    list_client_invoices: makeTool(
+      "list_client_invoices",
+      "List all invoices for a specific client",
+      z.object({ client_id: z.string() }),
+    ),
+    list_payment_history: makeTool(
+      "list_payment_history",
+      "List payment history, optionally filtered by client or invoice",
+      z.object({
+        limit: z.number().optional(),
+        client_id: z.string().optional(),
+        invoice_id: z.string().optional(),
+      }),
+    ),
+    mark_notification_read: makeTool(
+      "mark_notification_read",
+      "Mark a notification as read",
+      z.object({ notification_id: z.string() }),
+    ),
+    get_pending_approvals: makeTool(
+      "get_pending_approvals",
+      "List all pending approvals waiting for owner action",
+      z.object({}),
+    ),
+    list_ai_action_history: makeTool(
+      "list_ai_action_history",
+      "List AI action history, optionally filtered by status",
+      z.object({ limit: z.number().optional(), status: z.string().optional() }),
+    ),
   };
 
   let reply = "";
@@ -504,8 +583,10 @@ export async function runOrchestrator(args: {
   } catch (error) {
     console.error("duely orchestrator error", error);
     const message = error instanceof Error ? error.message : "";
-    if (message.includes("429")) reply = "Duely AI is rate limited right now. Please try again in a moment.";
-    else if (message.includes("402")) reply = "AI credits are exhausted. Please top up to keep using Duely AI.";
+    if (message.includes("429"))
+      reply = "Duely AI is rate limited right now. Please try again in a moment.";
+    else if (message.includes("402"))
+      reply = "AI credits are exhausted. Please top up to keep using Duely AI.";
     else reply = "Something went wrong while processing that. Please try again.";
   }
 

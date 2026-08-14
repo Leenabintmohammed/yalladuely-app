@@ -41,6 +41,32 @@ export function useInvoices() {
   });
 }
 
+export function useInvoiceDetails(invoiceId?: string) {
+  return useQuery({
+    queryKey: ["invoice", invoiceId],
+    enabled: Boolean(invoiceId),
+    queryFn: async () => {
+      const [invoiceResult, itemsResult, paymentsResult, plansResult] = await Promise.all([
+        supabase.from("invoices").select("*, clients(id,name,company_name,email)").eq("id", invoiceId!).maybeSingle(),
+        supabase.from("invoice_items").select("*").eq("invoice_id", invoiceId!).order("sort_order", { ascending: true }),
+        supabase.from("payments").select("*").eq("invoice_id", invoiceId!).order("payment_date", { ascending: false }),
+        supabase.from("payment_plans").select("*, payment_plan_installments(*)").eq("invoice_id", invoiceId!).order("created_at", { ascending: false }),
+      ]);
+      if (invoiceResult.error) throw invoiceResult.error;
+      if (!invoiceResult.data) throw new Error("Invoice not found");
+      if (itemsResult.error) throw itemsResult.error;
+      if (paymentsResult.error) throw paymentsResult.error;
+      if (plansResult.error) throw plansResult.error;
+      return {
+        invoice: invoiceResult.data,
+        items: itemsResult.data ?? [],
+        payments: paymentsResult.data ?? [],
+        plan: plansResult.data?.[0] ?? null,
+      };
+    },
+  });
+}
+
 export function usePayments() {
   return useQuery({
     queryKey: ["payments"],

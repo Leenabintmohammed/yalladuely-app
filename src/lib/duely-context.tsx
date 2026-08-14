@@ -1,7 +1,17 @@
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 
-export type Focus = { type: "client" | "invoice"; id: string; summary: string } | null;
-export type Selected = { type: "client" | "invoice"; id: string };
+export type Focus = {
+  type: "client" | "invoice" | "payment" | "payment_plan";
+  id: string;
+  summary: string;
+} | null;
+export type SelectionType = "client" | "invoice" | "payment" | "payment_plan";
+export type Selected = {
+  type: SelectionType;
+  id: string;
+  label?: string;
+  subtitle?: string;
+};
 
 type Ctx = {
   focus: Focus;
@@ -32,7 +42,19 @@ export function DuelyProvider({ children }: { children: ReactNode }) {
         : [...cur, s],
     );
   const value = useMemo(
-    () => ({ focus, setFocus, selection, setSelection, toggleSelected, page, setPage, aiOpen, setAiOpen, prefill, setPrefill }),
+    () => ({
+      focus,
+      setFocus,
+      selection,
+      setSelection,
+      toggleSelected,
+      page,
+      setPage,
+      aiOpen,
+      setAiOpen,
+      prefill,
+      setPrefill,
+    }),
     [focus, selection, page, aiOpen, prefill],
   );
   return <DuelyContext.Provider value={value}>{children}</DuelyContext.Provider>;

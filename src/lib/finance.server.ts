@@ -581,15 +581,14 @@ export type RiskResult = {
   outstanding: number;
 };
 
-export async function clientRisk(ctx: FinCtx, clientId: string): Promise<RiskResult> {
-  const { data: invoices } = await ctx.supabase.from("invoices").select("*").eq("client_id", clientId).eq("owner_id", ctx.userId);
-  const { data: payments } = await ctx.supabase
-    .from("payments")
-    .select("amount,payment_date,invoice_id,reversed_at")
-    .eq("client_id", clientId)
-    .eq("owner_id", ctx.userId);
-  const list = invoices ?? [];
-  const all = payments ?? [];
+/** Pure risk computation over already-fetched rows. Prefer this over `clientRisk` when scoring many clients to avoid N+1 queries. */
+export function computeClientRisk(
+  clientId: string,
+  invoices: { id: string; status: string; due_date: string; remaining_balance: number | string }[],
+  payments: { amount: number | string; payment_date: string; invoice_id: string | null; reversed_at?: string | null }[],
+): RiskResult {
+  const list = invoices;
+  const all = payments;
   const live = all.filter((p) => !p.reversed_at);
 
   const delays: number[] = [];
@@ -612,6 +611,16 @@ export async function clientRisk(ctx: FinCtx, clientId: string): Promise<RiskRes
   });
 
   return { client_id: clientId, ...scored, overdue_amount: overdueAmount, outstanding };
+}
+
+export async function clientRisk(ctx: FinCtx, clientId: string): Promise<RiskResult> {
+  const { data: invoices } = await ctx.supabase.from("invoices").select("*").eq("client_id", clientId).eq("owner_id", ctx.userId);
+  const { data: payments } = await ctx.supabase
+    .from("payments")
+    .select("amount,payment_date,invoice_id,reversed_at")
+    .eq("client_id", clientId)
+    .eq("owner_id", ctx.userId);
+  return computeClientRisk(clientId, invoices ?? [], payments ?? []);
 }
 
 /* ---------------------------------------------------------- notifications */
