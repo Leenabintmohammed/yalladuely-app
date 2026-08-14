@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateText, stepCountIs, tool } from "ai";
 import { z } from "zod";
 import { getDuelyModel, hasAiProvider } from "./ai-provider.server";
-import { buildApprovalActionInput } from "./ai.functions";
+import { buildApprovalActionInput, createApprovalSignature } from "./ai.functions";
 import {
   TOOL_AUTONOMY,
   executeTool,
@@ -264,6 +264,18 @@ export async function runOrchestrator(args: {
               entity_type: approvalInput.entity_type,
               entity_id: approvalInput.entity_id,
               state_hash: approvalInput.state_hash,
+              server_signature: createApprovalSignature({
+                owner_id: args.userId,
+                intent: name,
+                tool_name: name,
+                autonomy_level: autonomy,
+                parameters: params,
+                entity_type: approvalInput.entity_type ?? null,
+                entity_id: approvalInput.entity_id ?? null,
+                state_hash: approvalInput.state_hash ?? null,
+                expires_at: expiresAt,
+                status: "awaiting_approval",
+              }),
             })
             .select("*")
             .single();

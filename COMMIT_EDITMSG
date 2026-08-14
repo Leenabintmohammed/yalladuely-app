@@ -1,0 +1,43 @@
+
+# Please enter the commit message for your changes. Lines starting
+# with '#' will be ignored, and an empty message aborts the commit.
+#
+# On branch Updated-2
+# Your branch is ahead of 'origin/Updated-2' by 1 commit.
+#   (use "git push" to publish your local commits)
+#
+# Changes to be committed:
+#	modified:   .gitignore
+#	modified:   README.md
+#	deleted:    public/favicon.ico
+#	new file:   src/components/duely/AppHeader.tsx
+#	modified:   src/components/duely/AppShell.tsx
+#	modified:   src/components/duely/CommandCenter.tsx
+#	new file:   src/components/duely/NotificationMenu.tsx
+#	new file:   src/components/duely/UserMenu.tsx
+#	modified:   src/lib/ai-provider.server.ts
+#	new file:   src/lib/client.functions.ts
+#	modified:   src/lib/dashboard-analytics.server.ts
+#	new file:   src/lib/dashboard-view-model.ts
+#	new file:   src/lib/dashboard.functions.ts
+#	modified:   src/lib/duely-context.tsx
+#	modified:   src/lib/duely-orchestrator.server.ts
+#	modified:   src/lib/finance.server.ts
+#	modified:   src/lib/i18n.tsx
+#	new file:   src/lib/invoice.functions.ts
+#	new file:   src/lib/payment.functions.ts
+#	modified:   src/lib/queries.ts
+#	new file:   src/lib/settings.functions.ts
+#	modified:   src/routes/_authenticated/clients.tsx
+#	modified:   src/routes/_authenticated/dashboard.tsx
+#	modified:   src/routes/_authenticated/invoices.tsx
+#	modified:   src/routes/_authenticated/payments.tsx
+#	modified:   src/routes/_authenticated/route.tsx
+#	modified:   src/routes/_authenticated/settings.tsx
+#	modified:   src/routes/index.tsx
+#	modified:   src/styles.css
+#	modified:   supabase/config.toml
+#	modified:   tests/ai-provider.spec.ts
+#	new file:   tests/dashboard-view-model.spec.ts
+#	modified:   vite.config.ts
+#

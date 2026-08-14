@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 
 const ChatInput = z.object({
@@ -28,6 +29,54 @@ export type ChatResult = {
   pending: PendingAction[];
   performed: { tool: string; autonomy: string; status: string }[];
 };
+
+type ApprovalSignatureInput = {
+  owner_id: string;
+  intent: string | null;
+  tool_name: string;
+  autonomy_level: string;
+  parameters: unknown;
+  entity_type: string | null;
+  entity_id: string | null;
+  state_hash: string | null;
+  expires_at: string | null;
+  status: string;
+};
+
+function approvalSignatureSecret() {
+  const secret = process.env["SUPABASE_SERVICE_ROLE_KEY"];
+  if (!secret) throw new Error("approval_signing_secret_missing");
+  return secret;
+}
+
+function approvalSignaturePayload(input: ApprovalSignatureInput) {
+  return JSON.stringify([
+    input.owner_id,
+    input.intent,
+    input.tool_name,
+    input.autonomy_level,
+    input.parameters,
+    input.entity_type,
+    input.entity_id,
+    input.state_hash,
+    input.expires_at,
+    input.status,
+  ]);
+}
+
+export function createApprovalSignature(input: ApprovalSignatureInput) {
+  return createHmac("sha256", approvalSignatureSecret())
+    .update(approvalSignaturePayload(input))
+    .digest("hex");
+}
+
+export function isValidApprovalSignature(input: ApprovalSignatureInput, signature: string | null | undefined) {
+  if (!signature) return false;
+  const expected = createApprovalSignature(input);
+  const actual = Buffer.from(signature, "hex");
+  const expectedBytes = Buffer.from(expected, "hex");
+  return actual.length === expectedBytes.length && timingSafeEqual(actual, expectedBytes);
+}
 
 export function computeEntityStateHash(entity: Record<string, unknown> | null | undefined): string {
   if (!entity) return "";
@@ -119,6 +168,43 @@ export async function buildApprovalActionInput(
  * - Entity state has not changed (optional state hash validation)
  */
 export async function validateActionBeforeExecution(ctx: any, action: any) {
+  const { TOOL_AUTONOMY } = await import("./duely-tools.server");
+  const expectedAutonomy = TOOL_AUTONOMY[action.tool_name];
+  if (expectedAutonomy !== "approval_required" || action.autonomy_level !== expectedAutonomy) {
+    return {
+      valid: false,
+      reason: "invalid_autonomy",
+      message: "This action is not currently authorized for approval execution.",
+    };
+  }
+
+  try {
+    if (!isValidApprovalSignature({
+      owner_id: action.owner_id,
+      intent: action.intent,
+      tool_name: action.tool_name,
+      autonomy_level: action.autonomy_level,
+      parameters: action.parameters,
+      entity_type: action.entity_type,
+      entity_id: action.entity_id,
+      state_hash: action.state_hash,
+      expires_at: action.expires_at,
+      status: action.status,
+    }, action.server_signature)) {
+      return {
+        valid: false,
+        reason: "invalid_signature",
+        message: "This approval was not created by the server approval flow.",
+      };
+    }
+  } catch {
+    return {
+      valid: false,
+      reason: "signature_unavailable",
+      message: "Approval signing is not configured on the server.",
+    };
+  }
+
   const now = new Date();
 
   // Check expiration (default 15 minutes if expires_at is set)
@@ -226,7 +312,27 @@ export const resolveAction = createServerFn({ method: "POST" })
     }
 
     if (data.decision === "reject") {
-      await context.supabase.from("ai_actions").update({ status: "rejected", resolved_at: new Date().toISOString() }).eq("id", action.id);
+      const validation = await validateActionBeforeExecution(context, action);
+      if (!validation.valid) {
+        return { status: "error" as const, message: validation.message ?? "Validation failed" };
+      }
+      const resolvedAt = new Date().toISOString();
+      await context.supabase.from("ai_actions").update({
+        status: "rejected",
+        resolved_at: resolvedAt,
+        server_signature: createApprovalSignature({
+          owner_id: action.owner_id,
+          intent: action.intent,
+          tool_name: action.tool_name,
+          autonomy_level: action.autonomy_level,
+          parameters: action.parameters,
+          entity_type: action.entity_type,
+          entity_id: action.entity_id,
+          state_hash: action.state_hash,
+          expires_at: action.expires_at,
+          status: "rejected",
+        }) as never,
+      }).eq("id", action.id);
       await audit(
         { supabase: context.supabase, userId: context.userId, actor: "human" },
         {
@@ -259,6 +365,32 @@ export const resolveAction = createServerFn({ method: "POST" })
       return { status: "error" as const, message: validation.message ?? "Validation failed" };
     }
 
+    const { data: claimedAction } = await context.supabase
+      .from("ai_actions")
+      .update({
+        status: "executing",
+        server_signature: createApprovalSignature({
+          owner_id: action.owner_id,
+          intent: action.intent,
+          tool_name: action.tool_name,
+          autonomy_level: action.autonomy_level,
+          parameters: action.parameters,
+          entity_type: action.entity_type,
+          entity_id: action.entity_id,
+          state_hash: action.state_hash,
+          expires_at: action.expires_at,
+          status: "executing",
+        }) as never,
+      })
+      .eq("id", action.id)
+      .eq("owner_id", context.userId)
+      .eq("status", "awaiting_approval")
+      .select("id")
+      .maybeSingle();
+    if (!claimedAction) {
+      return { status: "error" as const, message: "already_resolved" };
+    }
+
     // Execute the tool
     const result = await executeTool(action.tool_name, (action.parameters ?? {}) as Record<string, unknown>, {
       supabase: context.supabase,
@@ -273,6 +405,18 @@ export const resolveAction = createServerFn({ method: "POST" })
       .from("ai_actions")
       .update({
         status: finalStatus,
+        server_signature: createApprovalSignature({
+          owner_id: action.owner_id,
+          intent: action.intent,
+          tool_name: action.tool_name,
+          autonomy_level: action.autonomy_level,
+          parameters: action.parameters,
+          entity_type: action.entity_type,
+          entity_id: action.entity_id,
+          state_hash: action.state_hash,
+          expires_at: action.expires_at,
+          status: finalStatus,
+        }) as never,
         result: result as never,
         new_state: result as never,
         origin: "human_approved",

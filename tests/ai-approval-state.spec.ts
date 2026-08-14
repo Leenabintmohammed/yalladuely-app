@@ -2,8 +2,11 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   buildApprovalActionInput,
   computeEntityStateHash,
+  createApprovalSignature,
   validateActionBeforeExecution,
 } from '../src/lib/ai.functions'
+
+vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'approval-test-secret')
 
 function makeSupabase(entity: Record<string, unknown>, userId = 'user_123') {
   return {
@@ -27,6 +30,25 @@ function makeSupabase(entity: Record<string, unknown>, userId = 'user_123') {
       };
       return query;
     }),
+  }
+}
+
+function makeApproval(entity: Record<string, unknown>, expiresAt: string) {
+  const action = {
+    owner_id: 'user_123',
+    intent: 'send_invoice',
+    tool_name: 'send_invoice',
+    autonomy_level: 'approval_required',
+    parameters: { invoice_id: 'inv_1' },
+    entity_type: 'invoices',
+    entity_id: 'inv_1',
+    state_hash: computeEntityStateHash(entity),
+    expires_at: expiresAt,
+    status: 'awaiting_approval',
+  }
+  return {
+    ...action,
+    server_signature: createApprovalSignature(action),
   }
 }
 
@@ -60,12 +82,7 @@ describe('AI approval state hash', () => {
     }
 
     const ctx = { supabase: makeSupabase(entity), userId: 'user_123' }
-    const action = {
-      entity_type: 'invoices',
-      entity_id: 'inv_1',
-      state_hash: computeEntityStateHash(entity),
-      expires_at: new Date(Date.now() + 60_000).toISOString(),
-    }
+    const action = makeApproval(entity, new Date(Date.now() + 60_000).toISOString())
 
     await expect(validateActionBeforeExecution(ctx as any, action as any)).resolves.toMatchObject({ valid: true })
   })
@@ -87,12 +104,7 @@ describe('AI approval state hash', () => {
     const changed = { ...original, ...patch }
 
     const ctx = { supabase: makeSupabase(changed), userId: 'user_123' }
-    const action = {
-      entity_type: 'invoices',
-      entity_id: 'inv_1',
-      state_hash: computeEntityStateHash(original),
-      expires_at: new Date(Date.now() + 60_000).toISOString(),
-    }
+    const action = makeApproval(original, new Date(Date.now() + 60_000).toISOString())
 
     await expect(validateActionBeforeExecution(ctx as any, action as any)).resolves.toMatchObject({
       valid: false,
@@ -111,12 +123,7 @@ describe('AI approval state hash', () => {
     }
 
     const ctx = { supabase: makeSupabase(entity), userId: 'user_123' }
-    const action = {
-      entity_type: 'invoices',
-      entity_id: 'inv_1',
-      state_hash: computeEntityStateHash(entity),
-      expires_at: new Date(Date.now() - 60_000).toISOString(),
-    }
+    const action = makeApproval(entity, new Date(Date.now() - 60_000).toISOString())
 
     await expect(validateActionBeforeExecution(ctx as any, action as any)).resolves.toMatchObject({
       valid: false,
