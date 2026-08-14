@@ -1,16 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Mic, Send, Sparkle } from "lucide-react";
+import { Mic, Send, Sparkle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { duelyChat, resolveAction, type PendingAction } from "@/lib/ai.functions";
-import { useDuely } from "@/lib/duely-context";
+import { useDuely, type Selected } from "@/lib/duely-context";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 type Msg =
   | { id: string; role: "user" | "assistant"; text: string }
-  | { id: string; role: "action"; action: PendingAction; state: "pending" | "approved" | "rejected" };
+  | {
+      id: string;
+      role: "action";
+      action: PendingAction;
+      state: "pending" | "approved" | "rejected";
+    };
 
 function newId() {
   return Math.random().toString(36).slice(2);
@@ -18,7 +23,7 @@ function newId() {
 
 export function CommandCenter({ className }: { className?: string }) {
   const { t, lang } = useI18n();
-  const { focus, selection, page, prefill, setPrefill } = useDuely();
+  const { focus, selection, page, prefill, setPrefill, setSelection } = useDuely();
   const queryClient = useQueryClient();
   const chat = useServerFn(duelyChat);
   const resolve = useServerFn(resolveAction);
@@ -73,7 +78,11 @@ export function CommandCenter({ className }: { className?: string }) {
     onError: () => {
       setMessages((m) => [
         ...m,
-        { id: newId(), role: "assistant", text: "I couldn't reach Duely AI just now. Please try again." },
+        {
+          id: newId(),
+          role: "assistant",
+          text: "I couldn't reach Duely AI just now. Please try again.",
+        },
       ]);
     },
   });
@@ -138,6 +147,39 @@ export function CommandCenter({ className }: { className?: string }) {
         </div>
       )}
 
+      {selection.length > 0 && (
+        <div className="border-b border-sidebar-border bg-primary-soft/40 px-5 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-medium text-primary">Selected context</p>
+            <button
+              className="text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => setSelection([])}
+            >
+              Clear
+            </button>
+          </div>
+          <div className="mt-2 flex max-h-20 flex-wrap gap-1.5 overflow-y-auto">
+            {selection.map((item) => (
+              <button
+                key={`${item.type}:${item.id}`}
+                title={
+                  item.subtitle
+                    ? `${item.label ?? item.type}: ${item.subtitle}`
+                    : `${item.type}: ${item.id}`
+                }
+                onClick={() => setSelection(selection.filter((current) => current !== item))}
+                className="flex max-w-full items-center gap-1 rounded-full border border-sidebar-border bg-card px-2 py-1 text-[11px] text-sidebar-foreground"
+              >
+                <span className="max-w-28 truncate">
+                  {item.label ?? `${item.type.replace("_", " ")} · ${item.id.slice(0, 8)}`}
+                </span>
+                <X className="size-3 shrink-0 text-muted-foreground" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div ref={scrollRef} className="duely-scroll flex-1 space-y-4 overflow-y-auto px-5 py-5">
         {messages.length === 0 && (
           <div className="space-y-4">
@@ -166,7 +208,9 @@ export function CommandCenter({ className }: { className?: string }) {
         {messages.map((m) =>
           m.role === "action" ? (
             <div key={m.id} className="rounded-xl border border-border bg-card p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-primary">{m.action.title}</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-primary">
+                {m.action.title}
+              </p>
               <dl className="mt-3 space-y-1.5">
                 {m.action.fields.map((f) => (
                   <div key={f.label} className="flex gap-3 text-sm">
@@ -193,7 +237,11 @@ export function CommandCenter({ className }: { className?: string }) {
                   >
                     {t("modify")}
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => decide(m.id, m.action, "reject")}>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => decide(m.id, m.action, "reject")}
+                  >
                     {t("cancel")}
                   </Button>
                 </div>
@@ -204,7 +252,10 @@ export function CommandCenter({ className }: { className?: string }) {
               )}
             </div>
           ) : (
-            <div key={m.id} className={cn("flex", m.role === "user" ? "justify-end" : "justify-start")}>
+            <div
+              key={m.id}
+              className={cn("flex", m.role === "user" ? "justify-end" : "justify-start")}
+            >
               <div
                 className={cn(
                   "max-w-[85%] whitespace-pre-wrap text-sm leading-relaxed",
@@ -246,10 +297,21 @@ export function CommandCenter({ className }: { className?: string }) {
             placeholder={t("ask_duely")}
             className="duely-scroll max-h-36 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground"
           />
-          <Button size="icon" variant="ghost" disabled title="Voice input coming soon" className="size-9 shrink-0">
+          <Button
+            size="icon"
+            variant="ghost"
+            disabled
+            title="Voice input coming soon"
+            className="size-9 shrink-0"
+          >
             <Mic className="size-4" />
           </Button>
-          <Button size="icon" onClick={submit} disabled={send.isPending || !input.trim()} className="size-9 shrink-0">
+          <Button
+            size="icon"
+            onClick={submit}
+            disabled={send.isPending || !input.trim()}
+            className="size-9 shrink-0"
+          >
             <Send className="size-4" />
           </Button>
         </div>

@@ -20,6 +20,10 @@ export type Database = {
           confidence: number | null
           conversation_id: string | null
           created_at: string
+          entity_id: string | null
+          entity_type: string | null
+          error: string | null
+          expires_at: string | null
           id: string
           intent: string | null
           new_state: Json | null
@@ -27,7 +31,9 @@ export type Database = {
           owner_id: string
           parameters: Json
           previous_state: Json | null
+          resolved_at: string | null
           result: Json | null
+          state_hash: string | null
           status: string
           tool_name: string
         }
@@ -36,6 +42,10 @@ export type Database = {
           confidence?: number | null
           conversation_id?: string | null
           created_at?: string
+          entity_id?: string | null
+          entity_type?: string | null
+          error?: string | null
+          expires_at?: string | null
           id?: string
           intent?: string | null
           new_state?: Json | null
@@ -43,7 +53,9 @@ export type Database = {
           owner_id: string
           parameters?: Json
           previous_state?: Json | null
+          resolved_at?: string | null
           result?: Json | null
+          state_hash?: string | null
           status?: string
           tool_name: string
         }
@@ -52,6 +64,10 @@ export type Database = {
           confidence?: number | null
           conversation_id?: string | null
           created_at?: string
+          entity_id?: string | null
+          entity_type?: string | null
+          error?: string | null
+          expires_at?: string | null
           id?: string
           intent?: string | null
           new_state?: Json | null
@@ -59,7 +75,9 @@ export type Database = {
           owner_id?: string
           parameters?: Json
           previous_state?: Json | null
+          resolved_at?: string | null
           result?: Json | null
+          state_hash?: string | null
           status?: string
           tool_name?: string
         }
@@ -92,6 +110,48 @@ export type Database = {
           owner_id?: string
           role?: string
           session_id?: string
+        }
+        Relationships: []
+      }
+      audit_logs: {
+        Row: {
+          action: string
+          actor_id: string | null
+          actor_type: string
+          after_state: Json | null
+          before_state: Json | null
+          created_at: string
+          entity_id: string | null
+          entity_type: string
+          id: string
+          metadata: Json
+          owner_id: string
+        }
+        Insert: {
+          action: string
+          actor_id?: string | null
+          actor_type?: string
+          after_state?: Json | null
+          before_state?: Json | null
+          created_at?: string
+          entity_id?: string | null
+          entity_type: string
+          id?: string
+          metadata?: Json
+          owner_id: string
+        }
+        Update: {
+          action?: string
+          actor_id?: string | null
+          actor_type?: string
+          after_state?: Json | null
+          before_state?: Json | null
+          created_at?: string
+          entity_id?: string | null
+          entity_type?: string
+          id?: string
+          metadata?: Json
+          owner_id?: string
         }
         Relationships: []
       }
@@ -217,12 +277,63 @@ export type Database = {
         }
         Relationships: []
       }
+      invoice_items: {
+        Row: {
+          created_at: string
+          description: string
+          id: string
+          invoice_id: string
+          line_total: number
+          owner_id: string
+          quantity: number
+          sort_order: number
+          unit_price: number
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          description: string
+          id?: string
+          invoice_id: string
+          line_total?: number
+          owner_id: string
+          quantity?: number
+          sort_order?: number
+          unit_price?: number
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          description?: string
+          id?: string
+          invoice_id?: string
+          line_total?: number
+          owner_id?: string
+          quantity?: number
+          sort_order?: number
+          unit_price?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "invoice_items_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       invoices: {
         Row: {
           amount: number
+          cancelled_at: string | null
           client_id: string
           created_at: string
           currency: string
+          discount_amount: number
+          discount_type: string
+          discount_value: number
           due_date: string
           id: string
           invoice_number: string
@@ -235,14 +346,22 @@ export type Database = {
           paid_date: string | null
           pdf_url: string | null
           remaining_balance: number
+          sent_at: string | null
           status: string
+          subtotal: number
+          tax_amount: number
+          tax_rate: number
           updated_at: string
         }
         Insert: {
           amount?: number
+          cancelled_at?: string | null
           client_id: string
           created_at?: string
           currency?: string
+          discount_amount?: number
+          discount_type?: string
+          discount_value?: number
           due_date?: string
           id?: string
           invoice_number: string
@@ -255,14 +374,22 @@ export type Database = {
           paid_date?: string | null
           pdf_url?: string | null
           remaining_balance?: number
+          sent_at?: string | null
           status?: string
+          subtotal?: number
+          tax_amount?: number
+          tax_rate?: number
           updated_at?: string
         }
         Update: {
           amount?: number
+          cancelled_at?: string | null
           client_id?: string
           created_at?: string
           currency?: string
+          discount_amount?: number
+          discount_type?: string
+          discount_value?: number
           due_date?: string
           id?: string
           invoice_number?: string
@@ -275,7 +402,11 @@ export type Database = {
           paid_date?: string | null
           pdf_url?: string | null
           remaining_balance?: number
+          sent_at?: string | null
           status?: string
+          subtotal?: number
+          tax_amount?: number
+          tax_rate?: number
           updated_at?: string
         }
         Relationships: [
@@ -414,6 +545,7 @@ export type Database = {
           client_id: string
           created_at: string
           currency: string
+          end_date: string | null
           frequency: string
           id: string
           installment_count: number
@@ -421,6 +553,7 @@ export type Database = {
           notes: string | null
           owner_id: string
           paid_amount: number
+          paused_at: string | null
           remaining_amount: number
           start_date: string
           status: string
@@ -431,6 +564,7 @@ export type Database = {
           client_id: string
           created_at?: string
           currency?: string
+          end_date?: string | null
           frequency?: string
           id?: string
           installment_count?: number
@@ -438,6 +572,7 @@ export type Database = {
           notes?: string | null
           owner_id: string
           paid_amount?: number
+          paused_at?: string | null
           remaining_amount?: number
           start_date?: string
           status?: string
@@ -448,6 +583,7 @@ export type Database = {
           client_id?: string
           created_at?: string
           currency?: string
+          end_date?: string | null
           frequency?: string
           id?: string
           installment_count?: number
@@ -455,6 +591,7 @@ export type Database = {
           notes?: string | null
           owner_id?: string
           paid_amount?: number
+          paused_at?: string | null
           remaining_amount?: number
           start_date?: string
           status?: string
@@ -485,6 +622,7 @@ export type Database = {
           created_at: string
           currency: string
           id: string
+          idempotency_key: string | null
           installment_id: string | null
           invoice_id: string | null
           is_demo: boolean
@@ -494,7 +632,9 @@ export type Database = {
           payment_method: string | null
           plan_id: string | null
           reference: string | null
+          reversal_reason: string | null
           reversed_at: string | null
+          reversed_by: string | null
         }
         Insert: {
           amount: number
@@ -502,6 +642,7 @@ export type Database = {
           created_at?: string
           currency?: string
           id?: string
+          idempotency_key?: string | null
           installment_id?: string | null
           invoice_id?: string | null
           is_demo?: boolean
@@ -511,7 +652,9 @@ export type Database = {
           payment_method?: string | null
           plan_id?: string | null
           reference?: string | null
+          reversal_reason?: string | null
           reversed_at?: string | null
+          reversed_by?: string | null
         }
         Update: {
           amount?: number
@@ -519,6 +662,7 @@ export type Database = {
           created_at?: string
           currency?: string
           id?: string
+          idempotency_key?: string | null
           installment_id?: string | null
           invoice_id?: string | null
           is_demo?: boolean
@@ -528,7 +672,9 @@ export type Database = {
           payment_method?: string | null
           plan_id?: string | null
           reference?: string | null
+          reversal_reason?: string | null
           reversed_at?: string | null
+          reversed_by?: string | null
         }
         Relationships: [
           {

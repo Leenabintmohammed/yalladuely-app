@@ -1,0 +1,126 @@
+import { describe, it, expect, vi } from 'vitest'
+import {
+  buildApprovalActionInput,
+  computeEntityStateHash,
+  validateActionBeforeExecution,
+} from '../src/lib/ai.functions'
+
+function makeSupabase(entity: Record<string, unknown>, userId = 'user_123') {
+  return {
+    from: vi.fn((table: string) => {
+      const query: Record<string, any> = {
+        _filters: [] as Array<[string, unknown]>,
+        select: vi.fn(() => query),
+        eq: vi.fn((field: string, value: unknown) => {
+          query._filters.push([field, value]);
+          return query;
+        }),
+        maybeSingle: vi.fn(async () => {
+          let data = table === 'invoices' && entity.id === 'inv_1' ? entity : null;
+          for (const [field, value] of query._filters) {
+            if (field === 'id' && data && data.id !== value) data = null;
+            if (field === 'owner_id' && data && data.owner_id !== value) data = null;
+            if (field === 'policy_key' && data && data.policy_key !== value) data = null;
+          }
+          return { data, error: null };
+        }),
+      };
+      return query;
+    }),
+  }
+}
+
+describe('AI approval state hash', () => {
+  it('creates an approval with a persisted state hash', async () => {
+    const entity = {
+      id: 'inv_1',
+      owner_id: 'user_123',
+      status: 'sent',
+      amount: 1000,
+      paid_amount: 250,
+      updated_at: '2025-01-01T00:00:00.000Z',
+    }
+
+    const action = await buildApprovalActionInput({ supabase: makeSupabase(entity), userId: 'user_123' } as any, 'send_invoice', { invoice_id: 'inv_1' })
+
+    expect(action.ok).toBe(true)
+    expect(action.entity_type).toBe('invoices')
+    expect(action.entity_id).toBe('inv_1')
+    expect(action.state_hash).toBe(computeEntityStateHash(entity))
+  })
+
+  it('approves when the entity is unchanged', async () => {
+    const entity = {
+      id: 'inv_1',
+      owner_id: 'user_123',
+      status: 'sent',
+      amount: 1000,
+      paid_amount: 250,
+      updated_at: '2025-01-01T00:00:00.000Z',
+    }
+
+    const ctx = { supabase: makeSupabase(entity), userId: 'user_123' }
+    const action = {
+      entity_type: 'invoices',
+      entity_id: 'inv_1',
+      state_hash: computeEntityStateHash(entity),
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+    }
+
+    await expect(validateActionBeforeExecution(ctx as any, action as any)).resolves.toMatchObject({ valid: true })
+  })
+
+  it.each([
+    ['status', { status: 'overdue' }],
+    ['amount', { amount: 1250 }],
+    ['paid_amount', { paid_amount: 300 }],
+    ['updated_at', { updated_at: '2025-01-02T00:00:00.000Z' }],
+  ])('rejects approval when %s changes', async (_, patch) => {
+    const original = {
+      id: 'inv_1',
+      owner_id: 'user_123',
+      status: 'sent',
+      amount: 1000,
+      paid_amount: 250,
+      updated_at: '2025-01-01T00:00:00.000Z',
+    }
+    const changed = { ...original, ...patch }
+
+    const ctx = { supabase: makeSupabase(changed), userId: 'user_123' }
+    const action = {
+      entity_type: 'invoices',
+      entity_id: 'inv_1',
+      state_hash: computeEntityStateHash(original),
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+    }
+
+    await expect(validateActionBeforeExecution(ctx as any, action as any)).resolves.toMatchObject({
+      valid: false,
+      reason: 'state_changed',
+    })
+  })
+
+  it('rejects when approval is expired', async () => {
+    const entity = {
+      id: 'inv_1',
+      owner_id: 'user_123',
+      status: 'sent',
+      amount: 1000,
+      paid_amount: 250,
+      updated_at: '2025-01-01T00:00:00.000Z',
+    }
+
+    const ctx = { supabase: makeSupabase(entity), userId: 'user_123' }
+    const action = {
+      entity_type: 'invoices',
+      entity_id: 'inv_1',
+      state_hash: computeEntityStateHash(entity),
+      expires_at: new Date(Date.now() - 60_000).toISOString(),
+    }
+
+    await expect(validateActionBeforeExecution(ctx as any, action as any)).resolves.toMatchObject({
+      valid: false,
+      reason: 'expired',
+    })
+  })
+})

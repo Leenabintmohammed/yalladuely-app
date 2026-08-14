@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Duely — AI financial operations for freelancers" },
+      { title: "Duely — AI financial operations for freelancers & SME" },
       {
         name: "description",
         content:
@@ -99,7 +99,7 @@ function Landing() {
       </main>
 
       <footer className="mx-auto max-w-6xl px-6 py-10 text-xs text-muted-foreground">
-        © {new Date().getFullYear()} Duely — AI financial operations.
+        © {new Date().getFullYear()} Duely — AI financial employee.
       </footer>
     </div>
   );

@@ -12,7 +12,7 @@ const dict = {
     settings: "Settings",
     duely_ai: "Duely AI",
     online: "Online",
-    ask_duely: "Ask Duely anything about your business…",
+    ask_duely: "Ask Duely about your invoices...",
     context: "Context",
     outstanding: "Outstanding",
     overdue: "Overdue",
