@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateText, stepCountIs, tool } from "ai";
 import { z } from "zod";
 import { getDuelyModel, hasAiProvider } from "./ai-provider.server";
+import { buildApprovalActionInput } from "./ai.functions";
 import { TOOL_AUTONOMY, executeTool, dashboardSummary, atRiskClients, type ToolCtx } from "./duely-tools.server";
 import { syncNotifications } from "./finance.server";
 
@@ -47,9 +48,9 @@ async function buildContext(
 ) {
   const [{ data: profile }, { data: policies }, summary, { data: clients }, notifications, risk] = await Promise.all([
     ctx.supabase.from("profiles").select("*").eq("id", ctx.userId).maybeSingle(),
-    ctx.supabase.from("company_policies").select("policy_key,policy_value"),
+    ctx.supabase.from("company_policies").select("policy_key,policy_value").eq("owner_id", ctx.userId),
     dashboardSummary(ctx),
-    ctx.supabase.from("clients").select("id,name,company_name,email").limit(50),
+    ctx.supabase.from("clients").select("id,name,company_name,email").eq("owner_id", ctx.userId).limit(50),
     syncNotifications(ctx),
     atRiskClients(ctx),
   ]);
@@ -61,16 +62,30 @@ async function buildContext(
       .from("invoices")
       .select("*, clients(id,name,company_name,email)")
       .eq("id", focus.id)
+      .eq("owner_id", ctx.userId)
       .maybeSingle();
     focusDetail = data;
     if (data?.client_id) {
-      const { data: m } = await ctx.supabase.from("client_memory").select("*").eq("client_id", data.client_id);
+      const { data: m } = await ctx.supabase
+        .from("client_memory")
+        .select("*")
+        .eq("owner_id", ctx.userId)
+        .eq("client_id", data.client_id);
       memory = m ?? [];
     }
   } else if (focus?.type === "client") {
-    const { data } = await ctx.supabase.from("clients").select("*").eq("id", focus.id).maybeSingle();
+    const { data } = await ctx.supabase
+      .from("clients")
+      .select("*")
+      .eq("id", focus.id)
+      .eq("owner_id", ctx.userId)
+      .maybeSingle();
     focusDetail = data;
-    const { data: m } = await ctx.supabase.from("client_memory").select("*").eq("client_id", focus.id);
+    const { data: m } = await ctx.supabase
+      .from("client_memory")
+      .select("*")
+      .eq("owner_id", ctx.userId)
+      .eq("client_id", focus.id);
     memory = m ?? [];
   }
 
@@ -81,6 +96,7 @@ async function buildContext(
     const { data } = await ctx.supabase
       .from("invoices")
       .select("id,invoice_number,amount,remaining_balance,currency,status,due_date, clients(id,name)")
+      .eq("owner_id", ctx.userId)
       .in("id", selectedInvoiceIds);
     selected['invoices'] = data ?? [];
   }
@@ -88,6 +104,7 @@ async function buildContext(
     const { data } = await ctx.supabase
       .from("clients")
       .select("id,name,company_name,email,status")
+      .eq("owner_id", ctx.userId)
       .in("id", selectedClientIds);
     selected['clients'] = data ?? [];
   }
@@ -161,6 +178,19 @@ export async function runOrchestrator(args: {
         const params = (input ?? {}) as Record<string, unknown>;
         const autonomy = TOOL_AUTONOMY[name] ?? "approval_required";
         if (autonomy === "approval_required") {
+          const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+          const approvalInput = await buildApprovalActionInput(ctx, name, params);
+
+          if (!approvalInput.ok) {
+            const error = approvalInput.error;
+            performed.push({ tool: name, autonomy, status: "rejected" });
+            return {
+              status: "error",
+              code: error?.code ?? "entity_not_found",
+              message: error?.message ?? "Approval could not be created.",
+            };
+          }
+
           const { data: action } = await ctx.supabase
             .from("ai_actions")
             .insert({
@@ -171,6 +201,10 @@ export async function runOrchestrator(args: {
               autonomy_level: autonomy,
               confidence: 0.95,
               status: "awaiting_approval",
+              expires_at: expiresAt,
+              entity_type: approvalInput.entity_type,
+              entity_id: approvalInput.entity_id,
+              state_hash: approvalInput.state_hash,
             })
             .select("*")
             .single();
@@ -189,6 +223,8 @@ export async function runOrchestrator(args: {
           return { status: "awaiting_approval", note: "An approval card was shown to the owner." };
         }
         const result = await executeTool(name, params, ctx);
+        const completionStatus = (result as { error?: string })?.error ? "failed" : "completed";
+        
         await ctx.supabase.from("ai_actions").insert({
           owner_id: args.userId,
           intent: name,
@@ -196,12 +232,13 @@ export async function runOrchestrator(args: {
           parameters: params as never,
           autonomy_level: autonomy,
           confidence: 0.96,
-          status: (result as { error?: string })?.error ? "failed" : "completed",
+          status: completionStatus,
           result: result as never,
           origin: "ai",
           new_state: result as never,
+          resolved_at: new Date().toISOString(),
         });
-        performed.push({ tool: name, autonomy, status: (result as { error?: string })?.error ? "failed" : "completed" });
+        performed.push({ tool: name, autonomy, status: completionStatus });
         return result;
       },
     });
@@ -424,6 +461,31 @@ export async function runOrchestrator(args: {
       "Read the audit trail of financial changes, optionally filtered by entity",
       z.object({ entity_type: z.string().optional(), entity_id: z.string().optional(), limit: z.number().optional() }),
     ),
+     list_client_invoices: makeTool(
+       "list_client_invoices",
+       "List all invoices for a specific client",
+       z.object({ client_id: z.string() }),
+     ),
+     list_payment_history: makeTool(
+       "list_payment_history",
+       "List payment history, optionally filtered by client or invoice",
+       z.object({ limit: z.number().optional(), client_id: z.string().optional(), invoice_id: z.string().optional() }),
+     ),
+     mark_notification_read: makeTool(
+       "mark_notification_read",
+       "Mark a notification as read",
+       z.object({ notification_id: z.string() }),
+     ),
+     get_pending_approvals: makeTool(
+       "get_pending_approvals",
+       "List all pending approvals waiting for owner action",
+       z.object({}),
+     ),
+     list_ai_action_history: makeTool(
+       "list_ai_action_history",
+       "List AI action history, optionally filtered by status",
+       z.object({ limit: z.number().optional(), status: z.string().optional() }),
+     ),
   };
 
   let reply = "";

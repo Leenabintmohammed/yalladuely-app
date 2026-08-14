@@ -81,6 +81,7 @@ export async function recalcInvoiceTotals(
     .from("invoices")
     .select("*")
     .eq("id", invoiceId)
+    .eq("owner_id", ctx.userId)
     .maybeSingle();
   if (!inv) return fail("not_found", "Invoice not found.", { invoice_id: invoiceId });
 
@@ -126,7 +127,7 @@ export async function recalcInvoiceTotals(
 
 /** Replace the line items of a draft invoice and recompute totals. */
 export async function replaceInvoiceItems(ctx: FinCtx, invoiceId: string, items: LineItemInput[]) {
-  const { data: inv } = await ctx.supabase.from("invoices").select("*").eq("id", invoiceId).maybeSingle();
+  const { data: inv } = await ctx.supabase.from("invoices").select("*").eq("id", invoiceId).eq("owner_id", ctx.userId).maybeSingle();
   if (!inv) return fail("not_found", "Invoice not found.", { invoice_id: invoiceId });
   if (!isEditableInvoice(inv.status))
     return fail("invoice_locked", `Invoice ${inv.invoice_number} is ${inv.status} and can no longer be edited.`);
@@ -162,7 +163,7 @@ export async function replaceInvoiceItems(ctx: FinCtx, invoiceId: string, items:
 
 /** Explicit owner/AI-driven status change, guarded by the state machine. */
 export async function setInvoiceStatus(ctx: FinCtx, invoiceId: string, next: string) {
-  const { data: inv } = await ctx.supabase.from("invoices").select("*").eq("id", invoiceId).maybeSingle();
+  const { data: inv } = await ctx.supabase.from("invoices").select("*").eq("id", invoiceId).eq("owner_id", ctx.userId).maybeSingle();
   if (!inv) return fail("not_found", "Invoice not found.", { invoice_id: invoiceId });
   if (inv.status === next) return { invoice: inv, unchanged: true };
   if (!canTransitionInvoice(inv.status, next))
@@ -194,7 +195,7 @@ export async function setInvoiceStatus(ctx: FinCtx, invoiceId: string, next: str
 
 /** Single source of truth: recompute paid/remaining/status of one invoice from its live payments. */
 export async function recalcInvoice(ctx: FinCtx, invoiceId: string) {
-  const { data: inv } = await ctx.supabase.from("invoices").select("*").eq("id", invoiceId).maybeSingle();
+  const { data: inv } = await ctx.supabase.from("invoices").select("*").eq("id", invoiceId).eq("owner_id", ctx.userId).maybeSingle();
   if (!inv) return null;
   const { data: pays } = await ctx.supabase
     .from("payments")
@@ -271,7 +272,7 @@ export async function recordPayment(ctx: FinCtx, input: RecordPaymentInput) {
 
   let invoice: Record<string, unknown> | null = null;
   if (input.invoice_id) {
-    const { data } = await ctx.supabase.from("invoices").select("*").eq("id", input.invoice_id).maybeSingle();
+    const { data } = await ctx.supabase.from("invoices").select("*").eq("id", input.invoice_id).eq("owner_id", ctx.userId).maybeSingle();
     if (!data) return fail("not_found", "Invoice not found.", { invoice_id: input.invoice_id });
     if (data.status === "cancelled") return fail("invoice_locked", "This invoice is cancelled.");
     if (data.status === "draft")
@@ -291,12 +292,13 @@ export async function recordPayment(ctx: FinCtx, input: RecordPaymentInput) {
       .from("payment_plan_installments")
       .select("*")
       .eq("id", input.installment_id)
+      .eq("owner_id", ctx.userId)
       .maybeSingle();
     if (!inst) return fail("not_found", "Installment not found.", { installment_id: input.installment_id });
     planId = planId ?? inst.plan_id;
   }
   if (planId) {
-    const { data: plan } = await ctx.supabase.from("payment_plans").select("status").eq("id", planId).maybeSingle();
+    const { data: plan } = await ctx.supabase.from("payment_plans").select("status").eq("id", planId).eq("owner_id", ctx.userId).maybeSingle();
     if (!plan) return fail("not_found", "Payment plan not found.", { plan_id: planId });
     if (plan.status === "cancelled") return fail("conflict", "This payment plan is cancelled.");
   }
@@ -375,7 +377,7 @@ export async function recordPayment(ctx: FinCtx, input: RecordPaymentInput) {
 
 /** Reverse a payment (never delete it) and roll every aggregate back. */
 export async function reversePayment(ctx: FinCtx, paymentId: string, reason?: string) {
-  const { data: pay } = await ctx.supabase.from("payments").select("*").eq("id", paymentId).maybeSingle();
+  const { data: pay } = await ctx.supabase.from("payments").select("*").eq("id", paymentId).eq("owner_id", ctx.userId).maybeSingle();
   if (!pay) return fail("not_found", "Payment not found.", { payment_id: paymentId });
   if (pay.reversed_at) return fail("conflict", "This payment was already reversed.");
 
@@ -487,7 +489,7 @@ export async function recalcPlan(
   ctx: FinCtx,
   planId: string,
 ): Promise<DuelyFailure | { plan: unknown; installments: Record<string, unknown>[] }> {
-  const { data: plan } = await ctx.supabase.from("payment_plans").select("*").eq("id", planId).maybeSingle();
+  const { data: plan } = await ctx.supabase.from("payment_plans").select("*").eq("id", planId).eq("owner_id", ctx.userId).maybeSingle();
   if (!plan) return fail("not_found", "Payment plan not found.", { plan_id: planId });
 
   const { data: installments } = await ctx.supabase
@@ -542,7 +544,7 @@ export async function recalcPlan(
 }
 
 export async function setPlanStatus(ctx: FinCtx, planId: string, next: string, reason?: string) {
-  const { data: plan } = await ctx.supabase.from("payment_plans").select("*").eq("id", planId).maybeSingle();
+  const { data: plan } = await ctx.supabase.from("payment_plans").select("*").eq("id", planId).eq("owner_id", ctx.userId).maybeSingle();
   if (!plan) return fail("not_found", "Payment plan not found.", { plan_id: planId });
   if (!canTransitionPlan(plan.status, next))
     return fail("invalid_state_transition", `Cannot move plan from ${plan.status} to ${next}.`, {
@@ -580,11 +582,12 @@ export type RiskResult = {
 };
 
 export async function clientRisk(ctx: FinCtx, clientId: string): Promise<RiskResult> {
-  const { data: invoices } = await ctx.supabase.from("invoices").select("*").eq("client_id", clientId);
+  const { data: invoices } = await ctx.supabase.from("invoices").select("*").eq("client_id", clientId).eq("owner_id", ctx.userId);
   const { data: payments } = await ctx.supabase
     .from("payments")
     .select("amount,payment_date,invoice_id,reversed_at")
-    .eq("client_id", clientId);
+    .eq("client_id", clientId)
+    .eq("owner_id", ctx.userId);
   const list = invoices ?? [];
   const all = payments ?? [];
   const live = all.filter((p) => !p.reversed_at);

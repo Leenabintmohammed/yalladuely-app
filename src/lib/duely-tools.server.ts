@@ -60,6 +60,11 @@ export const TOOL_AUTONOMY: Record<string, Autonomy> = {
   list_at_risk_clients: "auto",
   list_notifications: "auto",
   list_audit_log: "auto",
+  list_client_invoices: "auto",
+  list_payment_history: "auto",
+  mark_notification_read: "auto",
+  get_pending_approvals: "auto",
+  list_ai_action_history: "auto",
   write_off_invoice: "human_only",
   delete_client: "human_only",
   delete_invoice: "human_only",
@@ -91,13 +96,19 @@ export function deriveStatus(inv: {
 
 async function resolveClient(ctx: ToolCtx, p: { client_id?: string; client_name?: string }) {
   if (p.client_id) {
-    const { data } = await ctx.supabase.from("clients").select("*").eq("id", p.client_id).maybeSingle();
+    const { data } = await ctx.supabase
+      .from("clients")
+      .select("*")
+      .eq("id", p.client_id)
+      .eq("owner_id", ctx.userId)
+      .maybeSingle();
     return data;
   }
   if (!p.client_name) return null;
   const { data } = await ctx.supabase
     .from("clients")
     .select("*")
+    .eq("owner_id", ctx.userId)
     .or(`name.ilike.%${p.client_name}%,company_name.ilike.%${p.client_name}%`)
     .limit(2);
   if (!data || data.length !== 1) return data && data.length > 1 ? { __ambiguous: data } : null;
@@ -206,6 +217,7 @@ export async function executeTool(name: string, params: Record<string, unknown>,
       const { data } = await ctx.supabase
         .from("clients")
         .select("id,name,company_name,email,status")
+        .eq("owner_id", ctx.userId)
         .order("created_at", { ascending: false })
         .limit(50);
       return { clients: data ?? [] };
@@ -327,7 +339,7 @@ export async function executeTool(name: string, params: Record<string, unknown>,
       return await setInvoiceStatus(ctx, id, "cancelled");
     }
     case "get_invoice": {
-      let q = ctx.supabase.from("invoices").select("*, clients(name,company_name,email)");
+      let q = ctx.supabase.from("invoices").select("*, clients(name,company_name,email)").eq("owner_id", ctx.userId);
       q = p['invoice_id']
         ? q.eq("id", p['invoice_id'] as string)
         : q.ilike("invoice_number", `%${String(p['invoice_number'] ?? "")}%`);
@@ -339,6 +351,7 @@ export async function executeTool(name: string, params: Record<string, unknown>,
       let q = ctx.supabase
         .from("invoices")
         .select("id,invoice_number,amount,currency,status,due_date,remaining_balance,client_id, clients(name)")
+        .eq("owner_id", ctx.userId)
         .order("due_date", { ascending: true })
         .limit(50);
       if (p['status']) q = q.eq("status", p['status'] as string);
@@ -411,6 +424,7 @@ export async function executeTool(name: string, params: Record<string, unknown>,
         .from("invoices")
         .select("*, clients(name,company_name,email)")
         .eq("id", invoiceId)
+        .eq("owner_id", ctx.userId)
         .maybeSingle();
       if (!inv) return { error: "invoice_not_found" };
       const tone = (p['tone'] as string) ?? "friendly";
@@ -444,6 +458,7 @@ export async function executeTool(name: string, params: Record<string, unknown>,
         .from("reminders")
         .update({ status: "sent", sent_at: new Date().toISOString() })
         .eq("id", id)
+        .eq("owner_id", ctx.userId)
         .select("*")
         .single();
       if (error) return { error: error.message };
@@ -465,7 +480,10 @@ export async function executeTool(name: string, params: Record<string, unknown>,
       return { saved: true, policy: data };
     }
     case "get_company_policies": {
-      const { data } = await ctx.supabase.from("company_policies").select("policy_key,policy_value");
+      const { data } = await ctx.supabase
+        .from("company_policies")
+        .select("policy_key,policy_value")
+        .eq("owner_id", ctx.userId);
       return { policies: data ?? [] };
     }
     case "save_memory": {
@@ -504,7 +522,12 @@ export async function executeTool(name: string, params: Record<string, unknown>,
       let total = num(p['total_amount']);
       let currency = (p['currency'] as string) ?? null;
       if (invoiceId) {
-        const { data: inv } = await ctx.supabase.from("invoices").select("*").eq("id", invoiceId).maybeSingle();
+        const { data: inv } = await ctx.supabase
+        .from("invoices")
+        .select("*")
+        .eq("id", invoiceId)
+        .eq("owner_id", ctx.userId)
+        .maybeSingle();
         if (!inv) return { error: "invoice_not_found" };
         if (!total) total = num(inv.remaining_balance) || num(inv.amount);
         currency = currency ?? inv.currency;
@@ -525,6 +548,7 @@ export async function executeTool(name: string, params: Record<string, unknown>,
       let q = ctx.supabase
         .from("payment_plans")
         .select("*, clients(name,company_name)")
+        .eq("owner_id", ctx.userId)
         .order("created_at", { ascending: false })
         .limit(50);
       if (p['client_id']) q = q.eq("client_id", p['client_id'] as string);
@@ -535,6 +559,8 @@ export async function executeTool(name: string, params: Record<string, unknown>,
     case "get_payment_plan": {
       const id = p['plan_id'] as string;
       if (!id) return { error: "missing_plan_id" };
+      const { data: plan } = await ctx.supabase.from("payment_plans").select("*").eq("id", id).eq("owner_id", ctx.userId).maybeSingle();
+      if (!plan) return { error: "not_found" };
       return await recalcPlan(ctx, id);
     }
     case "cancel_payment_plan": {
@@ -563,6 +589,7 @@ export async function executeTool(name: string, params: Record<string, unknown>,
         .from("payment_plan_installments")
         .select("*, payment_plans(id,client_id,invoice_id,currency)")
         .eq("id", installmentId)
+        .eq("owner_id", ctx.userId)
         .maybeSingle();
       if (!inst) return fail("not_found", "Installment not found.", { installment_id: installmentId });
       const plan = inst.payment_plans as {
@@ -618,6 +645,63 @@ export async function executeTool(name: string, params: Record<string, unknown>,
       const { data } = await q;
       return { audit_log: data ?? [] };
     }
+     case "list_client_invoices": {
+       const clientId = p['client_id'] as string;
+       if (!clientId) return fail("validation_failed", "client_id is required.");
+       const { data } = await ctx.supabase
+         .from("invoices")
+         .select("id,invoice_number,amount,remaining_balance,currency,status,due_date,issue_date,paid_date")
+         .eq("owner_id", ctx.userId)
+         .eq("client_id", clientId)
+         .order("due_date", { ascending: false });
+       return { invoices: data ?? [] };
+     }
+     case "list_payment_history": {
+       let q = ctx.supabase
+         .from("payments")
+         .select("id,amount,currency,payment_date,payment_method,reference,invoice_id,plan_id,reversed_at")
+         .eq("owner_id", ctx.userId)
+         .order("payment_date", { ascending: false })
+         .limit(Math.min(200, Math.max(1, num(p['limit'], 50))));
+       if (p['client_id']) q = q.eq("client_id", p['client_id'] as string);
+       if (p['invoice_id']) q = q.eq("invoice_id", p['invoice_id'] as string);
+       const { data } = await q;
+       return { payments: data ?? [] };
+     }
+     case "mark_notification_read": {
+       const notificationId = p['notification_id'] as string;
+       if (!notificationId) return fail("validation_failed", "notification_id is required.");
+       const { data, error } = await ctx.supabase
+         .from("notifications")
+         .update({ read_at: new Date().toISOString() })
+         .eq("id", notificationId)
+         .eq("owner_id", ctx.userId)
+         .select("*")
+         .maybeSingle();
+       if (error) return { error: error.message };
+       if (!data) return { error: "not_found" };
+       return { marked_read: true, notification: data };
+     }
+     case "get_pending_approvals": {
+       const { data } = await ctx.supabase
+         .from("ai_actions")
+         .select("id,tool_name,parameters,autonomy_level,status,created_at,expires_at,entity_type,entity_id")
+         .eq("owner_id", ctx.userId)
+         .eq("status", "awaiting_approval")
+         .order("created_at", { ascending: false });
+       return { pending_approvals: data ?? [] };
+     }
+     case "list_ai_action_history": {
+       let q = ctx.supabase
+         .from("ai_actions")
+         .select("id,tool_name,parameters,autonomy_level,status,created_at,resolved_at,result")
+         .eq("owner_id", ctx.userId)
+         .order("created_at", { ascending: false })
+         .limit(Math.min(100, Math.max(1, num(p['limit'], 25))));
+       if (p['status']) q = q.eq("status", p['status'] as string);
+       const { data } = await q;
+       return { ai_actions: data ?? [] };
+     }
     default:
       return fail("validation_failed", `Unknown tool: ${name}`, { tool: name });
   }
@@ -640,7 +724,8 @@ export async function dashboardSummary(ctx: ToolCtx) {
   await refreshOverdue(ctx);
   const { data: invoices } = await ctx.supabase
     .from("invoices")
-    .select("id,invoice_number,amount,paid_amount,remaining_balance,currency,status,due_date, clients(name,company_name)");
+    .select("id,invoice_number,amount,paid_amount,remaining_balance,currency,status,due_date, clients(name,company_name)")
+    .eq("owner_id", ctx.userId);
   const list = invoices ?? [];
   const open = list.filter((i) => !["paid", "cancelled", "draft"].includes(i.status));
   const overdue = list.filter((i) => i.status === "overdue");
@@ -649,16 +734,19 @@ export async function dashboardSummary(ctx: ToolCtx) {
   const { data: payments } = await ctx.supabase
     .from("payments")
     .select("amount,payment_date")
+    .eq("owner_id", ctx.userId)
     .gte("payment_date", monthStart.toISOString().slice(0, 10));
   const monthEnd = new Date(monthStart);
   monthEnd.setMonth(monthEnd.getMonth() + 1);
   const { data: plans } = await ctx.supabase
     .from("payment_plans")
     .select("id,status,total_amount,paid_amount,remaining_amount,currency,client_id, clients(name)")
+    .eq("owner_id", ctx.userId)
     .in("status", ["active", "at_risk"]);
   const { data: upcoming } = await ctx.supabase
     .from("payment_plan_installments")
     .select("id,seq,due_date,amount,paid_amount,status,plan_id")
+    .eq("owner_id", ctx.userId)
     .in("status", ["pending", "partial", "overdue"])
     .order("due_date", { ascending: true })
     .limit(10);
@@ -690,11 +778,21 @@ export async function dashboardSummary(ctx: ToolCtx) {
 }
 
 export async function clientFinancials(ctx: ToolCtx, clientId: string) {
-  const { data: client } = await ctx.supabase.from("clients").select("*").eq("id", clientId).maybeSingle();
-  const { data: invoices } = await ctx.supabase.from("invoices").select("*").eq("client_id", clientId);
+  const { data: client } = await ctx.supabase
+    .from("clients")
+    .select("*")
+    .eq("id", clientId)
+    .eq("owner_id", ctx.userId)
+    .maybeSingle();
+  const { data: invoices } = await ctx.supabase
+    .from("invoices")
+    .select("*")
+    .eq("owner_id", ctx.userId)
+    .eq("client_id", clientId);
   const { data: payments } = await ctx.supabase
     .from("payments")
     .select("amount,payment_date,invoice_id")
+    .eq("owner_id", ctx.userId)
     .eq("client_id", clientId);
   const list = invoices ?? [];
   const totalBilled = list.filter((i) => i.status !== "draft").reduce((s, i) => s + num(i.amount), 0);
