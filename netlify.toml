@@ -1,2 +1,7 @@
 [build]
   command = "npm run build"
+
+[build.environment]
+  # These values are intentionally exposed to the browser by the Vite client.
+  # Keep secret scanning enabled for private credentials such as OPENAI_API_KEY.
+  SECRETS_SCAN_OMIT_KEYS = "SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY,SUPABASE_PROJECT_ID,VITE_SUPABASE_URL,VITE_SUPABASE_PUBLISHABLE_KEY,VITE_SUPABASE_PROJECT_ID"
