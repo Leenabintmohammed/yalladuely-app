@@ -384,7 +384,7 @@ export async function runOrchestrator(args: {
     ),
     send_invoice: makeTool(
       "send_invoice",
-      "Send an invoice to the client (requires owner approval, simulated sending)",
+      "Send an invoice to the client by email after owner approval",
       z.object({ invoice_id: z.string() }),
     ),
     record_payment: makeTool(
