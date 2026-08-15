@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { generateInvoicePDF } from "./pdf-generator.server";
 import {
   audit,
   clientRisk,
@@ -445,13 +446,144 @@ export async function executeTool(name: string, params: Record<string, unknown>,
       if (error) return { error: error.message };
       return { reminder: data, invoice_number: inv.invoice_number, client: inv.clients };
     }
-    case "send_invoice": {
-      const id = p['invoice_id'] as string;
-      if (!id) return fail("validation_failed", "invoice_id is required.");
-      const moved = await setInvoiceStatus(ctx, id, "sent");
-      if (isFailure(moved)) return moved;
-      return { sent: true, simulated: true, invoice: moved.invoice };
-    }
+case "send_invoice": {
+  const id = p["invoice_id"] as string;
+  if (!id) return fail("validation_failed", "invoice_id is required.");
+
+  const { data: invoice, error: invoiceError } = await ctx.supabase
+    .from("invoices")
+    .select("*, client:client_id(name, email)")
+    .eq("id", id)
+    .eq("owner_id", ctx.userId)
+    .maybeSingle();
+
+  if (invoiceError) return fail("internal_error", invoiceError.message);
+  if (!invoice) return fail("not_found", "Invoice not found.");
+
+  const client = invoice.client as { name?: string; email?: string } | null;
+  const recipient = client?.email?.trim();
+
+  if (!recipient) {
+    return fail(
+      "validation_failed",
+      `Client ${client?.name ?? "for this invoice"} does not have an email address.`,
+    );
+  }
+
+  const { data: items, error: itemsError } = await ctx.supabase
+    .from("invoice_items")
+    .select("description, quantity, unit_price, line_total")
+    .eq("invoice_id", id)
+    .eq("owner_id", ctx.userId)
+    .order("sort_order", { ascending: true });
+
+  if (itemsError) return fail("internal_error", itemsError.message);
+
+  const { data: profile, error: profileError } = await ctx.supabase
+    .from("profiles")
+    .select("company_name, address")
+    .eq("id", ctx.userId)
+    .maybeSingle();
+
+  if (profileError) return fail("internal_error", profileError.message);
+
+  const pdfBytes = await generateInvoicePDF({
+    invoice_number: invoice.invoice_number,
+    issue_date: invoice.issue_date?.slice(0, 10) ?? today(),
+    due_date: invoice.due_date?.slice(0, 10) ?? today(),
+    client_name: client?.name ?? "Client",
+    client_email: recipient,
+    company_name: profile?.company_name ?? "Your Company",
+    company_address: profile?.address ?? undefined,
+    currency: invoice.currency ?? "AED",
+    amount: num(invoice.amount),
+    subtotal: num(invoice.subtotal),
+    discount: num(invoice.discount),
+    tax: num(invoice.tax),
+    paid_amount: num(invoice.paid_amount),
+    items: (items ?? []).map((item) => ({
+      description: item.description,
+      quantity: num(item.quantity, 1),
+      unit_price: num(item.unit_price),
+      line_total: num(item.line_total),
+    })),
+    notes: invoice.notes ?? undefined,
+  });
+
+  const apiKey = process.env["RESEND_API_KEY"];
+
+  if (!apiKey) {
+    return fail(
+      "internal_error",
+      "Email service is not configured. RESEND_API_KEY is missing.",
+    );
+  }
+
+  const pdfBase64 = Buffer.from(pdfBytes).toString("base64");
+
+  const emailResponse = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: "Duely <billing@yalladuely.com>",
+      to: [recipient],
+      subject: `Invoice ${invoice.invoice_number} from ${profile?.company_name ?? "Duely"}`,
+      html: `
+        <p>Hello ${client?.name ?? "there"},</p>
+
+        <p>Please find your invoice attached.</p>
+
+        <p>
+          <strong>Invoice:</strong> ${invoice.invoice_number}<br />
+          <strong>Amount:</strong> ${invoice.amount} ${invoice.currency ?? "AED"}<br />
+          <strong>Due date:</strong> ${invoice.due_date?.slice(0, 10) ?? "—"}
+        </p>
+
+        <p>Thank you.</p>
+      `,
+      attachments: [
+        {
+          filename: `invoice-${invoice.invoice_number}.pdf`,
+          content: pdfBase64,
+        },
+      ],
+    }),
+  });
+
+  const emailResult = (await emailResponse.json()) as {
+    id?: string;
+    message?: string;
+  };
+
+  if (!emailResponse.ok || !emailResult.id) {
+    console.error("Resend invoice email failed", {
+      status: emailResponse.status,
+      message: emailResult.message,
+    });
+
+    return fail(
+      "internal_error",
+      emailResult.message ?? "Invoice email could not be sent.",
+    );
+  }
+
+  const moved = await setInvoiceStatus(ctx, id, "sent");
+
+  if (isFailure(moved)) {
+    return moved;
+  }
+
+  return {
+    sent: true,
+    simulated: false,
+    email_id: emailResult.id,
+    recipient,
+    invoice: moved.invoice,
+  };
+}
     case "send_reminder": {
       const id = p['reminder_id'] as string;
       const { data, error } = await ctx.supabase
