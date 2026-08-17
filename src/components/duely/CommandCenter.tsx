@@ -53,7 +53,25 @@ export function CommandCenter({ className }: { className?: string }) {
     queryClient.invalidateQueries().catch(() => {
       /* ignore */
     });
+const result = await resolve({
+  data: { action_id: action.id, decision },
+});
 
+invalidate();
+
+if (decision === "approve") {
+  setMessages((m) => [
+    ...m,
+    {
+      id: newId(),
+      role: "assistant",
+      text:
+        result.status === "error"
+          ? `Invoice was not sent: ${result.message}`
+          : "Invoice sent successfully.",
+    },
+  ]);
+}
   const send = useMutation({
     mutationFn: async (text: string) =>
       chat({
