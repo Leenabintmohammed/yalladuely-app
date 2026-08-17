@@ -8,7 +8,7 @@ import {
   resolveAction,
   type PendingAction,
 } from "@/lib/ai.functions";
-import { useDuely, type Selected } from "@/lib/duely-context";
+import { useDuely } from "@/lib/duely-context";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -29,8 +29,13 @@ function newId() {
   return Math.random().toString(36).slice(2);
 }
 
-export function CommandCenter({ className }: { className?: string }) {
+export function CommandCenter({
+  className,
+}: {
+  className?: string;
+}) {
   const { t, lang } = useI18n();
+
   const {
     focus,
     selection,
@@ -149,7 +154,9 @@ export function CommandCenter({ className }: { className?: string }) {
 
     send.mutate(text);
 
-    requestAnimationFrame(() => inputRef.current?.focus());
+    requestAnimationFrame(() =>
+      inputRef.current?.focus(),
+    );
   };
 
   const decide = async (
@@ -182,25 +189,15 @@ export function CommandCenter({ className }: { className?: string }) {
       invalidate();
 
       if (decision === "approve") {
-        const status = result?.status;
-        const message = result?.message;
-
         let text: string;
 
-        if (
-          status === "error" ||
-          status === "failed"
-        ) {
-          text = `Invoice was not sent: ${
-            message || "The action failed."
-          }`;
-        } else if (status === "completed") {
-          text =
-            message ||
-            "Invoice sent successfully.";
+        if (result.status === "failed") {
+          text = `Invoice was not sent: ${result.message}`;
+        } else if (result.status === "completed") {
+          text = `Invoice action completed: ${result.message}`;
         } else {
           text =
-            message ||
+            result.message ||
             "Invoice action completed.";
         }
 
@@ -215,17 +212,15 @@ export function CommandCenter({ className }: { className?: string }) {
       }
     } catch (error) {
       if (decision === "approve") {
-        const message =
-          error instanceof Error
-            ? error.message
-            : "The action could not be completed.";
-
         setMessages((m) => [
           ...m,
           {
             id: newId(),
             role: "assistant",
-            text: `Invoice was not sent: ${message}`,
+            text:
+              error instanceof Error
+                ? `Invoice was not sent: ${error.message}`
+                : "Invoice was not sent.",
           },
         ]);
       }
