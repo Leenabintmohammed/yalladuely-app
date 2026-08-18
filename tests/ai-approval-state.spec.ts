@@ -6,7 +6,7 @@ import {
   validateActionBeforeExecution,
 } from '../src/lib/ai.functions'
 
-vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'approval-test-secret')
+vi.stubEnv('APPROVAL_SIGNING_SECRET', 'approval-test-secret')
 
 function makeSupabase(entity: Record<string, unknown>, userId = 'user_123') {
   return {
@@ -51,6 +51,31 @@ function makeApproval(entity: Record<string, unknown>, expiresAt: string) {
     server_signature: createApprovalSignature(action),
   }
 }
+
+it('preserves approval signatures across a PostgreSQL timestamptz round trip', () => {
+  const approval = {
+    owner_id: 'user_123',
+    intent: 'send_invoice',
+    tool_name: 'send_invoice',
+    autonomy_level: 'approval_required',
+    parameters: { invoice_id: 'inv_1' },
+    entity_type: 'invoices',
+    entity_id: 'inv_1',
+    state_hash: 'state_hash',
+    status: 'awaiting_approval',
+  }
+
+  const signatureAtCreation = createApprovalSignature({
+    ...approval,
+    expires_at: '2026-08-18T12:34:56.789Z',
+  })
+  const signatureAfterRead = createApprovalSignature({
+    ...approval,
+    expires_at: '2026-08-18T12:34:56.789+00:00',
+  })
+
+  expect(signatureAfterRead).toBe(signatureAtCreation)
+})
 
 describe('AI approval state hash', () => {
   it('creates an approval with a persisted state hash', async () => {
