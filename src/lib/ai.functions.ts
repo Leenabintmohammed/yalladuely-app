@@ -45,42 +45,16 @@ type ApprovalSignatureInput = {
 
 function approvalSignatureSecret() {
   const secret = process.env["APPROVAL_SIGNING_SECRET"];
-
-  if (!secret) {
-    throw new Error("approval_signing_secret_missing");
-  }
-
+  if (!secret) throw new Error("approval_signing_secret_missing");
   return secret;
 }
 
-function stableSerialize(value: unknown): string {
-  if (value === null || value === undefined) {
-    return JSON.stringify(value);
-  }
+function approvalSignaturePayload(input: ApprovalSignatureInput) {
+  const canonicalExpiresAt = input.expires_at
+    ? new Date(input.expires_at).toISOString()
+    : null;
 
-  if (Array.isArray(value)) {
-    return `[${value.map(stableSerialize).join(",")}]`;
-  }
-
-  if (typeof value === "object") {
-    const obj = value as Record<string, unknown>;
-
-    return `{${Object.keys(obj)
-      .sort()
-      .map(
-        (key) =>
-          `${JSON.stringify(key)}:${stableSerialize(obj[key])}`,
-      )
-      .join(",")}}`;
-  }
-
-  return JSON.stringify(value);
-}
-
-function approvalSignaturePayload(
-  input: ApprovalSignatureInput,
-) {
-  return stableSerialize([
+  return JSON.stringify([
     input.owner_id,
     input.intent,
     input.tool_name,
@@ -89,7 +63,7 @@ function approvalSignaturePayload(
     input.entity_type,
     input.entity_id,
     input.state_hash,
-    input.expires_at,
+    canonicalExpiresAt,
     input.status,
   ]);
 }
