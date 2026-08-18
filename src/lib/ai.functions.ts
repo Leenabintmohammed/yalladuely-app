@@ -53,8 +53,34 @@ function approvalSignatureSecret() {
   return secret;
 }
 
-function approvalSignaturePayload(input: ApprovalSignatureInput) {
-  return JSON.stringify([
+function stableSerialize(value: unknown): string {
+  if (value === null || value === undefined) {
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map(stableSerialize).join(",")}]`;
+  }
+
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+
+    return `{${Object.keys(obj)
+      .sort()
+      .map(
+        (key) =>
+          `${JSON.stringify(key)}:${stableSerialize(obj[key])}`,
+      )
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function approvalSignaturePayload(
+  input: ApprovalSignatureInput,
+) {
+  return stableSerialize([
     input.owner_id,
     input.intent,
     input.tool_name,
