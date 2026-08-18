@@ -44,8 +44,12 @@ type ApprovalSignatureInput = {
 };
 
 function approvalSignatureSecret() {
-  const secret = process.env["SUPABASE_SERVICE_ROLE_KEY"];
-  if (!secret) throw new Error("approval_signing_secret_missing");
+  const secret = process.env["APPROVAL_SIGNING_SECRET"];
+
+  if (!secret) {
+    throw new Error("approval_signing_secret_missing");
+  }
+
   return secret;
 }
 
