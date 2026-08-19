@@ -29,6 +29,10 @@ function AuthPage() {
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [companyName, setCompanyName] = useState("");
+  const [address, setAddress] = useState("");
+  const [phoneNumber, setPhoneNumber] = useState("");
+
+
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -47,7 +51,8 @@ function AuthPage() {
           password,
           options: {
             emailRedirectTo: window.location.origin,
-            data: { full_name: fullName, company_name: companyName },
+            data: { full_name: fullName, company_name: companyName, address: address, phone_number: phoneNumber
+             },
           },
         });
         if (error) throw error;
@@ -109,6 +114,14 @@ function AuthPage() {
               <div className="space-y-1.5">
                 <Label htmlFor="company">Company name</Label>
                 <Input id="company" value={companyName} onChange={(e) => setCompanyName(e.target.value)} required />
+              </div>
+                <div className="space-y-1.5">
+                <Label htmlFor="address">Address</Label>
+                <Input id="address" value={address} onChange={(e) => setAddress(e.target.value)} required />
+              </div>
+                              <div className="space-y-1.5">
+                <Label htmlFor="phoneNumber">Phone Number</Label>
+                <Input id="phoneNumber" type="tel" value={phoneNumber} onChange={(e) => setPhoneNumber(e.target.value)} required />
               </div>
             </>
           )}
