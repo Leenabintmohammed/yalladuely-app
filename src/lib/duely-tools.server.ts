@@ -449,41 +449,26 @@ export async function executeTool(name: string, params: Record<string, unknown>,
 case "send_invoice": {
   const id = p["invoice_id"] as string;
   if (!id) return fail("validation_failed", "invoice_id is required.");
-const { data: invoice, error: invoiceError } = await ctx.supabase
-  .from("invoices")
-  .select("*, clients(name, email)")
-  .eq("id", id)
-  .eq("owner_id", ctx.userId)
-  .maybeSingle();
 
-if (invoiceError) {
-  return {
-    ok: false,
-    error: "internal_error",
-    message: invoiceError.message,
-  };
-}
+  const { data: invoice, error: invoiceError } = await ctx.supabase
+    .from("invoices")
+    .select("*")
+    .eq("id", id)
+    .eq("owner_id", ctx.userId)
+    .maybeSingle();
 
-if (!invoice) {
-  return {
-    ok: false,
-    error: "invoice_not_found",
-    message: "Invoice not found or you do not have access to it.",
-  };
-}
+  if (invoiceError) return fail("internal_error", invoiceError.message);
+  if (!invoice) return fail("not_found", "Invoice not found.");
 
-const client = invoice.clients as {
-  name?: string;
-  email?: string;
-} | null;
+  const { data: client, error: clientError } = await ctx.supabase
+    .from("clients")
+    .select("name, email")
+    .eq("id", invoice.client_id)
+    .eq("owner_id", ctx.userId)
+    .maybeSingle();
 
-if (!client) {
-  return {
-    ok: false,
-    error: "client_not_found",
-    message: "The client associated with this invoice could not be found.",
-  };
-}
+  if (clientError) return fail("internal_error", clientError.message);
+
   const recipient = client?.email?.trim();
 
   if (!recipient) {
