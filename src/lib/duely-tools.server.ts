@@ -452,7 +452,7 @@ case "send_invoice": {
 const { data: invoice, error: invoiceError } = await ctx.supabase
   .from("invoices")
   .select("*, clients(name, email)")
-  .eq("id", invoiceId)
+  .eq("id", id)
   .eq("owner_id", ctx.userId)
   .maybeSingle();
 
